@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  webui:
+    image: ${IMAGE_NAME:-codex-register}:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${HOST_PORT:-1455}:${WEBUI_PORT:-1455}"
+    environment:
+      WEBUI_HOST: ${WEBUI_HOST:-0.0.0.0}
+      WEBUI_PORT: ${WEBUI_PORT:-1455}
+      WEBUI_ACCESS_PASSWORD: ${WEBUI_ACCESS_PASSWORD:-admin123}
+      DEBUG: ${DEBUG:-0}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      # 挂载数据目录以持久化数据库和日志
+      - ./data:/app/data
+      - ./logs:/app/logs
+    restart: unless-stopped
