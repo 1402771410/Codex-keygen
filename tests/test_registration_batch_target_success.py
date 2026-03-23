@@ -196,8 +196,11 @@ def test_get_active_registration_tasks_skips_auto_select_when_multiple_running()
 
     result = asyncio.run(registration_routes.get_active_registration_tasks())
 
-    assert result["active"] is None
+    assert result["active"] is not None
+    assert result["active"]["batch_id"] == batch_id
+    assert result["active"]["mode"] == "batch"
     assert result["active_count"] == 2
+    assert result["active_ambiguous"] is True
     assert result["batch_tasks"][0]["batch_id"] == batch_id
 
 
@@ -282,8 +285,10 @@ def test_get_active_registration_tasks_prefers_live_batch_by_activity():
 
     result = asyncio.run(registration_routes.get_active_registration_tasks())
 
-    assert result["active"] is None
+    assert result["active"] is not None
+    assert result["active"]["batch_id"] == "batch-live"
     assert result["active_count"] == 2
+    assert result["active_ambiguous"] is True
     assert result["batch_tasks"][0]["batch_id"] == "batch-live"
 
 
@@ -317,6 +322,7 @@ def test_get_active_registration_tasks_returns_active_when_single_candidate():
     result = asyncio.run(registration_routes.get_active_registration_tasks())
 
     assert result["active_count"] == 1
+    assert result["active_ambiguous"] is False
     assert result["active"]["batch_id"] == batch_id
     assert result["active"]["mode"] == "batch"
 
@@ -364,6 +370,7 @@ def test_get_active_registration_tasks_ignores_worker_subtasks_from_same_batch()
     result = asyncio.run(registration_routes.get_active_registration_tasks())
 
     assert result["active_count"] == 1
+    assert result["active_ambiguous"] is False
     assert result["active"]["batch_id"] == batch_id
     assert result["active"]["mode"] == "batch"
 

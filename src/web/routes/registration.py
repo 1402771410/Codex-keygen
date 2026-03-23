@@ -1849,17 +1849,16 @@ async def get_active_registration_tasks():
         if not (item.get("batch_id") and item.get("batch_id") in active_batch_ids)
     ]
 
-    if single_items:
+    if filtered_single_items:
         filtered_single_items.sort(key=_single_active_sort_key, reverse=True)
 
     active_candidates = len(batch_items) + len(filtered_single_items)
-    active = None
-    if active_candidates == 1:
-        active = batch_items[0] if batch_items else filtered_single_items[0]
+    active = batch_items[0] if batch_items else (filtered_single_items[0] if filtered_single_items else None)
 
     return {
         "active": active,
         "active_count": active_candidates,
+        "active_ambiguous": active_candidates > 1,
         "single_tasks": filtered_single_items,
         "batch_tasks": batch_items,
     }
