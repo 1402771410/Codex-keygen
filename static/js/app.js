@@ -513,6 +513,27 @@ function setEmailServiceSelection(taskMode, settings) {
         if (hasOutlookBatchOption) {
             elements.emailService.value = 'outlook_batch:all';
             handleServiceChange({ target: elements.emailService });
+        } else {
+            // 即使服务列表暂时未包含 outlook_batch 选项，也要先恢复模式 UI，避免重开后看不到监控与设置。
+            isOutlookBatchMode = true;
+            isBatchMode = false;
+            isLoopMode = false;
+            if (elements.outlookBatchSection) {
+                elements.outlookBatchSection.style.display = 'block';
+            }
+            if (elements.regModeGroup) {
+                elements.regModeGroup.style.display = 'none';
+            }
+            if (elements.batchCountGroup) {
+                elements.batchCountGroup.style.display = 'none';
+            }
+            if (elements.loopWindowGroup) {
+                elements.loopWindowGroup.style.display = 'none';
+            }
+            if (elements.batchOptions) {
+                elements.batchOptions.style.display = 'none';
+            }
+            loadOutlookAccounts();
         }
         return;
     }
@@ -530,6 +551,7 @@ function setEmailServiceSelection(taskMode, settings) {
         candidateValues.push('tempmail:default');
     }
     candidateValues.push(`${emailServiceType}:default`);
+    candidateValues.push(emailServiceType);
 
     const options = Array.from(elements.emailService.options);
     const matched = options.find((opt) => candidateValues.includes(opt.value));
@@ -1974,11 +1996,14 @@ async function restoreSingleTaskById(taskUuid, settings = {}) {
     isLoopMode = false;
     isOutlookBatchMode = false;
 
-    const mergedSettings = data.settings || settings || {};
+    const mergedSettings = {
+        ...(settings || {}),
+        ...(data.settings || {}),
+    };
     applyRecoveredTaskSettings('single', mergedSettings);
     showTaskStatus(data);
     updateTaskStatus(data.status);
-    addLog('info', `[系统] 检测到进行中的任务，正在重连监控... (${taskUuid.substring(0, 8)})`);
+    addLog('info', `[系统] 检测到进行中的任务，正在重连监控... (${String(taskUuid).slice(0, 8)})`);
     connectWebSocket(taskUuid);
     return true;
 }
@@ -1992,7 +2017,10 @@ async function restoreBatchTaskById(taskMode, batchId, fallback = {}) {
         return false;
     }
 
-    const settings = data.config_snapshot || fallback.settings || {};
+    const settings = {
+        ...(fallback.settings || {}),
+        ...(data.config_snapshot || {}),
+    };
     const normalizedMode = taskMode === 'loop' ? 'loop' : (taskMode === 'outlook_batch' ? 'outlook_batch' : 'batch');
 
     currentBatch = { batch_id: batchId, ...data };
@@ -2007,6 +2035,35 @@ async function restoreBatchTaskById(taskMode, batchId, fallback = {}) {
     elements.startBtn.disabled = true;
     elements.cancelBtn.disabled = false;
 
+    if (normalizedMode === 'outlook_batch') {
+        if (elements.outlookBatchSection) {
+            elements.outlookBatchSection.style.display = 'block';
+        }
+        if (elements.regModeGroup) {
+            elements.regModeGroup.style.display = 'none';
+        }
+        if (elements.batchCountGroup) {
+            elements.batchCountGroup.style.display = 'none';
+        }
+        if (elements.loopWindowGroup) {
+            elements.loopWindowGroup.style.display = 'none';
+        }
+        if (elements.batchOptions) {
+            elements.batchOptions.style.display = 'none';
+        }
+    } else {
+        if (elements.outlookBatchSection) {
+            elements.outlookBatchSection.style.display = 'none';
+        }
+        if (elements.regModeGroup) {
+            elements.regModeGroup.style.display = 'block';
+        }
+        if (elements.regMode) {
+            elements.regMode.value = normalizedMode === 'loop' ? 'loop' : 'batch';
+            handleModeChange({ target: elements.regMode });
+        }
+    }
+
     applyRecoveredTaskSettings(normalizedMode, settings);
 
     showBatchStatus({
@@ -2016,19 +2073,23 @@ async function restoreBatchTaskById(taskMode, batchId, fallback = {}) {
         window_end: fallback.window_end || data.window_end || settings.window_end,
     });
     updateBatchProgress(data);
-    addLog('info', `[系统] 检测到进行中的批量任务，正在重连监控... (${batchId.substring(0, 8)})`);
+    addLog('info', `[系统] 检测到进行中的批量任务，正在重连监控... (${String(batchId).slice(0, 8)})`);
     connectBatchWebSocket(batchId);
     return true;
 }
 
 async function restoreFromServerActive() {
     const activeResponse = await api.get('/registration/active');
-    const active = activeResponse.active;
+    const batchCandidates = Array.isArray(activeResponse.batch_tasks) ? activeResponse.batch_tasks : [];
+    const singleCandidates = Array.isArray(activeResponse.single_tasks) ? activeResponse.single_tasks : [];
+    const active = activeResponse.active || batchCandidates[0] || singleCandidates[0];
+
     if (!active) {
-        if (Number(activeResponse.active_count || 0) > 1) {
-            addLog('warning', '[系统] 检测到多个进行中的任务，已跳过自动绑定以避免监控错绑');
-        }
         return false;
+    }
+
+    if (!activeResponse.active && Number(activeResponse.active_count || 0) > 1) {
+        addLog('warning', '[系统] 检测到多个进行中的任务，已自动恢复最近活跃任务的监控');
     }
 
     if (active.mode === 'single' && active.task_uuid) {
@@ -2095,11 +2156,8 @@ async function restoreActiveTask() {
     if (!restored) {
         try {
             restored = await restoreFromServerActive();
-            if (!restored) {
-                clearActiveTaskState();
-            }
-        } catch {
-            clearActiveTaskState();
+        } catch (error) {
+            console.warn('[状态恢复] 服务端活动任务恢复失败:', error);
         }
     }
 }
