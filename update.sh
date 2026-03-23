@@ -12,6 +12,9 @@ BRANCH_NAME="${BRANCH_NAME:-main}"
 ENV_FILE="${ENV_FILE:-.env.docker}"
 SERVICE_NAME="${SERVICE_NAME:-webui}"
 TARGET_REPO_URL="${REPO_URL:-https://github.com/1402771410/Codex-Manager-zh.git}"
+AUTO_STASH="${AUTO_STASH:-1}"
+STASH_CREATED=0
+STASH_LABEL=""
 
 log() {
     printf '[update] %s\n' "$*"
@@ -64,6 +67,17 @@ fi
 log "获取远程最新代码..."
 git fetch "$REMOTE_NAME" "$BRANCH_NAME"
 
+if [[ -n "$(git status --porcelain)" ]]; then
+    if [[ "$AUTO_STASH" == "1" ]]; then
+        STASH_LABEL="update-auto-stash-$(date +%Y%m%d-%H%M%S)"
+        log "检测到本地改动，自动暂存：$STASH_LABEL"
+        git stash push -u -m "$STASH_LABEL" >/dev/null
+        STASH_CREATED=1
+    else
+        fail "检测到本地改动，请先提交/暂存后再更新，或设置 AUTO_STASH=1。"
+    fi
+fi
+
 current_branch="$(git branch --show-current || true)"
 if [[ "$current_branch" != "$BRANCH_NAME" ]]; then
     log "切换分支到 $BRANCH_NAME"
@@ -76,6 +90,13 @@ fi
 
 log "拉取并对齐分支：$REMOTE_NAME/$BRANCH_NAME"
 git pull --rebase "$REMOTE_NAME" "$BRANCH_NAME"
+
+if [[ "$STASH_CREATED" -eq 1 ]]; then
+    log "本地改动已暂存，可用以下命令查看/恢复："
+    log "  git stash list"
+    log "  git stash show -p stash@{0}"
+    log "  git stash pop"
+fi
 
 log "重建并后台启动容器"
 "${COMPOSE_CMD[@]}" --env-file "$ENV_FILE" up -d --build
