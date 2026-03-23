@@ -327,6 +327,10 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
 
     这个函数会被 run_in_executor 调用，运行在独立线程中
     """
+    status_context: Dict[str, Any] = {}
+    if batch_id:
+        status_context["batch_id"] = batch_id
+
     with get_db() as db:
         try:
             # 检查是否已取消
@@ -346,7 +350,7 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                 return
 
             # 更新 TaskManager 状态
-            task_manager.update_status(task_uuid, "running")
+            task_manager.update_status(task_uuid, "running", **status_context)
 
             # 确定使用的代理
             # 如果前端传入了代理参数，使用传入的
@@ -606,7 +610,7 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                 )
 
                 # 更新 TaskManager 状态
-                task_manager.update_status(task_uuid, "completed", email=result.email)
+                task_manager.update_status(task_uuid, "completed", email=result.email, **status_context)
 
                 logger.info(f"注册任务完成: {task_uuid}, 邮箱: {result.email}")
             else:
@@ -619,7 +623,7 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                 )
 
                 # 更新 TaskManager 状态
-                task_manager.update_status(task_uuid, "failed", error=result.error_message)
+                task_manager.update_status(task_uuid, "failed", error=result.error_message, **status_context)
 
                 logger.warning(f"注册任务失败: {task_uuid}, 原因: {result.error_message}")
 
@@ -636,7 +640,7 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                     )
 
                 # 更新 TaskManager 状态
-                task_manager.update_status(task_uuid, "failed", error=str(e))
+                task_manager.update_status(task_uuid, "failed", error=str(e), **status_context)
             except:
                 pass
 
@@ -652,8 +656,12 @@ async def run_registration_task(task_uuid: str, email_service_type: str, proxy: 
         loop = asyncio.get_event_loop()
         task_manager.set_loop(loop)
 
+    status_context: Dict[str, Any] = {}
+    if batch_id:
+        status_context["batch_id"] = batch_id
+
     # 初始化 TaskManager 状态
-    task_manager.update_status(task_uuid, "pending")
+    task_manager.update_status(task_uuid, "pending", **status_context)
     task_manager.add_log(task_uuid, f"{log_prefix} [系统] 任务 {task_uuid[:8]} 已加入队列" if log_prefix else f"[系统] 任务 {task_uuid[:8]} 已加入队列")
 
     try:
@@ -678,7 +686,7 @@ async def run_registration_task(task_uuid: str, email_service_type: str, proxy: 
     except Exception as e:
         logger.error(f"线程池执行异常: {task_uuid}, 错误: {e}")
         task_manager.add_log(task_uuid, f"[错误] 线程池执行异常: {str(e)}")
-        task_manager.update_status(task_uuid, "failed", error=str(e))
+        task_manager.update_status(task_uuid, "failed", error=str(e), **status_context)
 
 
 def _init_batch_state(
@@ -1796,6 +1804,7 @@ async def get_active_registration_tasks():
             "mode": "single",
             "task_uuid": task_uuid,
             "status": status,
+            "batch_id": status_data.get("batch_id"),
             "settings": status_data.get("settings") or {},
             "created_at": status_data.get("created_at"),
             "updated_at": status_data.get("updated_at"),
@@ -1832,18 +1841,26 @@ async def get_active_registration_tasks():
     if batch_items:
         # 优先恢复批量/循环任务，且优先选择当前最活跃的任务，避免误绑到历史残留任务。
         batch_items.sort(key=_batch_active_sort_key, reverse=True)
-    if single_items:
-        single_items.sort(key=_single_active_sort_key, reverse=True)
 
-    active_candidates = len(batch_items) + len(single_items)
+    active_batch_ids = {item["batch_id"] for item in batch_items}
+    filtered_single_items = [
+        item
+        for item in single_items
+        if not (item.get("batch_id") and item.get("batch_id") in active_batch_ids)
+    ]
+
+    if single_items:
+        filtered_single_items.sort(key=_single_active_sort_key, reverse=True)
+
+    active_candidates = len(batch_items) + len(filtered_single_items)
     active = None
     if active_candidates == 1:
-        active = batch_items[0] if batch_items else single_items[0]
+        active = batch_items[0] if batch_items else filtered_single_items[0]
 
     return {
         "active": active,
         "active_count": active_candidates,
-        "single_tasks": single_items,
+        "single_tasks": filtered_single_items,
         "batch_tasks": batch_items,
     }
 

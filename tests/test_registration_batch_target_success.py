@@ -107,6 +107,28 @@ def test_start_batch_registration_uses_target_success_mode(monkeypatch):
     assert state["failed"] == 0
 
 
+def test_run_registration_task_records_batch_id_for_worker_status(monkeypatch):
+    task_uuid = "worker-status-1"
+    batch_id = "batch-parent-1"
+
+    monkeypatch.setattr(registration_routes, "_run_sync_registration_task", lambda *args, **kwargs: None)
+
+    asyncio.run(
+        registration_routes.run_registration_task(
+            task_uuid=task_uuid,
+            email_service_type="tempmail",
+            proxy=None,
+            email_service_config=None,
+            batch_id=batch_id,
+        )
+    )
+
+    status = registration_routes.task_manager.get_status(task_uuid)
+    assert status is not None
+    assert status["status"] == "pending"
+    assert status["batch_id"] == batch_id
+
+
 def test_get_batch_status_returns_target_success_and_attempts():
     batch_id = "batch-test-1"
     registration_routes.batch_tasks[batch_id] = {
@@ -291,6 +313,53 @@ def test_get_active_registration_tasks_returns_active_when_single_candidate():
         "updated_at": "2026-03-22T12:01:00",
         "logs": [],
     }
+
+    result = asyncio.run(registration_routes.get_active_registration_tasks())
+
+    assert result["active_count"] == 1
+    assert result["active"]["batch_id"] == batch_id
+    assert result["active"]["mode"] == "batch"
+
+
+def test_get_active_registration_tasks_ignores_worker_subtasks_from_same_batch():
+    batch_id = "batch-restore-1"
+
+    registration_routes.batch_tasks[batch_id] = {
+        "total": 12,
+        "target_success": 12,
+        "attempts": 6,
+        "completed": 2,
+        "success": 2,
+        "failed": 4,
+        "current_index": 6,
+        "cancelled": False,
+        "finished": False,
+        "status": "running",
+        "registration_mode": "batch",
+        "window_start": None,
+        "window_end": None,
+        "in_window": True,
+        "next_window_seconds": 0,
+        "running": 2,
+        "next_run_at": None,
+        "config_snapshot": {"registration_mode": "batch", "count": 12},
+        "created_at": "2026-03-23T10:00:00",
+        "updated_at": "2026-03-23T10:01:00",
+        "logs": [],
+    }
+
+    registration_routes.task_manager.update_status(
+        "worker-1",
+        "running",
+        batch_id=batch_id,
+        settings={"registration_mode": "single"},
+    )
+    registration_routes.task_manager.update_status(
+        "worker-2",
+        "running",
+        batch_id=batch_id,
+        settings={"registration_mode": "single"},
+    )
 
     result = asyncio.run(registration_routes.get_active_registration_tasks())
 
