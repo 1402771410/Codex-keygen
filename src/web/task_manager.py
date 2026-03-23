@@ -13,6 +13,9 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+MAX_TASK_LOG_ENTRIES = 2000
+MAX_BATCH_LOG_ENTRIES = 3000
+
 # 全局线程池（支持最多 50 个并发注册任务）
 _executor = ThreadPoolExecutor(max_workers=50, thread_name_prefix="reg_worker")
 
@@ -99,7 +102,10 @@ class TaskManager:
 
         # 广播后再添加到队列
         with _get_log_lock(task_uuid):
-            _log_queues[task_uuid].append(log_message)
+            queue = _log_queues[task_uuid]
+            queue.append(log_message)
+            if len(queue) > MAX_TASK_LOG_ENTRIES:
+                del queue[: len(queue) - MAX_TASK_LOG_ENTRIES]
 
     async def _broadcast_log(self, task_uuid: str, log_message: str):
         """广播日志到所有 WebSocket 连接"""
@@ -193,14 +199,29 @@ class TaskManager:
     def update_status(self, task_uuid: str, status: str, **kwargs):
         """更新任务状态"""
         if task_uuid not in _task_status:
-            _task_status[task_uuid] = {}
+            _task_status[task_uuid] = {
+                "created_at": datetime.utcnow().isoformat(),
+            }
 
-        _task_status[task_uuid]["status"] = status
-        _task_status[task_uuid].update(kwargs)
+        status_payload = {
+            "status": status,
+            **kwargs,
+        }
+        if "updated_at" not in status_payload:
+            status_payload["updated_at"] = datetime.utcnow().isoformat()
+
+        if "created_at" not in _task_status[task_uuid]:
+            _task_status[task_uuid]["created_at"] = status_payload["updated_at"]
+
+        _task_status[task_uuid].update(status_payload)
 
     def get_status(self, task_uuid: str) -> Optional[dict]:
         """获取任务状态"""
         return _task_status.get(task_uuid)
+
+    def get_all_task_statuses(self) -> Dict[str, dict]:
+        """获取全部任务状态快照。"""
+        return {task_uuid: status.copy() for task_uuid, status in _task_status.items()}
 
     def cleanup_task(self, task_uuid: str):
         """清理任务数据"""
@@ -213,6 +234,7 @@ class TaskManager:
 
     def init_batch(self, batch_id: str, total: int):
         """初始化批量任务"""
+        now_iso = datetime.utcnow().isoformat()
         _batch_status[batch_id] = {
             "status": "running",
             "total": total,
@@ -221,7 +243,9 @@ class TaskManager:
             "failed": 0,
             "skipped": 0,
             "current_index": 0,
-            "finished": False
+            "finished": False,
+            "created_at": now_iso,
+            "updated_at": now_iso,
         }
         logger.info(f"批量任务 {batch_id} 已初始化，总数: {total}")
 
@@ -239,7 +263,10 @@ class TaskManager:
 
         # 广播后再添加到队列
         with _get_batch_lock(batch_id):
-            _batch_logs[batch_id].append(log_message)
+            logs = _batch_logs[batch_id]
+            logs.append(log_message)
+            if len(logs) > MAX_BATCH_LOG_ENTRIES:
+                del logs[: len(logs) - MAX_BATCH_LOG_ENTRIES]
 
     async def _broadcast_batch_log(self, batch_id: str, log_message: str):
         """广播批量任务日志"""
@@ -270,7 +297,16 @@ class TaskManager:
             logger.warning(f"批量任务 {batch_id} 不存在")
             return
 
-        _batch_status[batch_id].update(kwargs)
+        status_payload = dict(kwargs)
+        if "updated_at" not in status_payload:
+            status_payload["updated_at"] = datetime.utcnow().isoformat()
+
+        if "created_at" not in _batch_status[batch_id]:
+            _batch_status[batch_id]["created_at"] = status_payload["updated_at"]
+        if "created_at" not in status_payload:
+            status_payload["created_at"] = _batch_status[batch_id]["created_at"]
+
+        _batch_status[batch_id].update(status_payload)
 
         # 异步广播状态更新
         if self._loop and self._loop.is_running():
@@ -303,6 +339,10 @@ class TaskManager:
     def get_batch_status(self, batch_id: str) -> Optional[dict]:
         """获取批量任务状态"""
         return _batch_status.get(batch_id)
+
+    def get_all_batch_statuses(self) -> Dict[str, dict]:
+        """获取全部批量任务状态快照。"""
+        return {batch_id: status.copy() for batch_id, status in _batch_status.items()}
 
     def get_batch_logs(self, batch_id: str) -> List[str]:
         """获取批量任务日志"""

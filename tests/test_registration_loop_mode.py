@@ -55,7 +55,17 @@ def test_start_batch_registration_loop_requires_window():
     assert "时间段" in str(exc.value.detail)
 
 
-def test_start_batch_registration_loop_initializes_state_and_response():
+def test_start_batch_registration_loop_initializes_state_and_response(monkeypatch):
+    captured = {}
+
+    def fake_spawn(coro):
+        captured["called"] = True
+        coro.close()
+        return None
+
+    # 与 HTTP 请求解耦后不再依赖 BackgroundTasks，改为验证已触发 detached spawn。
+    monkeypatch.setattr(registration_routes, "_spawn_detached_coroutine", fake_spawn)
+
     request = registration_routes.BatchRegistrationRequest(
         registration_mode="loop",
         email_service_type="tempmail",
@@ -75,7 +85,7 @@ def test_start_batch_registration_loop_initializes_state_and_response():
     assert response.tasks == []
     assert response.window_start == "08:05"
     assert response.window_end == "23:00"
-    assert len(background_tasks.tasks) == 1
+    assert captured.get("called") is True
 
     state = registration_routes.batch_tasks[response.batch_id]
     assert state["registration_mode"] == "loop"

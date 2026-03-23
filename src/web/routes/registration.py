@@ -7,7 +7,7 @@ import logging
 import uuid
 import random
 from datetime import datetime, timedelta
-from typing import List, Optional, Dict, Tuple
+from typing import List, Optional, Dict, Tuple, Any, Coroutine, Set
 
 from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
 from pydantic import BaseModel, Field
@@ -27,6 +27,37 @@ router = APIRouter()
 running_tasks: dict = {}
 # 批量任务存储
 batch_tasks: Dict[str, dict] = {}
+# 与请求生命周期解耦的后台任务引用，避免任务被 GC 或随连接断开中断。
+_detached_background_tasks: Set[asyncio.Task[Any]] = set()
+
+
+def _spawn_detached_coroutine(coro: Coroutine[Any, Any, Any]) -> asyncio.Task[Any]:
+    """启动与 HTTP 请求解耦的后台协程。"""
+    loop = task_manager.get_loop()
+    try:
+        running_loop = asyncio.get_running_loop()
+        loop = running_loop
+    except RuntimeError:
+        if loop is None:
+            loop = asyncio.get_event_loop()
+            task_manager.set_loop(loop)
+
+    task = loop.create_task(coro)
+    _detached_background_tasks.add(task)
+
+    def _cleanup(done_task: asyncio.Task[Any]):
+        _detached_background_tasks.discard(done_task)
+        try:
+            exc = done_task.exception()
+        except asyncio.CancelledError:
+            logger.warning("后台协程被取消")
+            return
+
+        if exc:
+            logger.error(f"后台协程异常: {exc}")
+
+    task.add_done_callback(_cleanup)
+    return task
 
 
 # ============== Proxy Helper Functions ==============
@@ -110,6 +141,7 @@ class RegistrationTaskResponse(BaseModel):
     proxy: Optional[str] = None
     logs: Optional[str] = None
     result: Optional[dict] = None
+    settings: Optional[dict] = None
     error_message: Optional[str] = None
     created_at: Optional[str] = None
     started_at: Optional[str] = None
@@ -183,7 +215,7 @@ class OutlookBatchRegistrationResponse(BaseModel):
 
 # ============== Helper Functions ==============
 
-def task_to_response(task: RegistrationTask) -> RegistrationTaskResponse:
+def task_to_response(task: RegistrationTask, settings: Optional[dict] = None) -> RegistrationTaskResponse:
     """转换任务模型为响应"""
     return RegistrationTaskResponse(
         id=task.id,
@@ -193,6 +225,7 @@ def task_to_response(task: RegistrationTask) -> RegistrationTaskResponse:
         proxy=task.proxy,
         logs=task.logs,
         result=task.result,
+        settings=settings,
         error_message=task.error_message,
         created_at=task.created_at.isoformat() if task.created_at else None,
         started_at=task.started_at.isoformat() if task.started_at else None,
@@ -658,11 +691,14 @@ def _init_batch_state(
 ):
     """初始化批量任务内存状态（支持 batch/loop）。"""
     existing = batch_tasks.get(batch_id, {})
+    now_iso = datetime.utcnow().isoformat()
     total = len(task_uuids)
     task_manager.init_batch(batch_id, total)
 
     state = {
         "total": total,
+        "target_success": int(existing.get("target_success", total)),
+        "attempts": int(existing.get("attempts", 0)),
         "completed": int(existing.get("completed", 0)),
         "success": int(existing.get("success", 0)),
         "failed": int(existing.get("failed", 0)),
@@ -679,6 +715,8 @@ def _init_batch_state(
         "next_window_seconds": int(existing.get("next_window_seconds", 0)),
         "running": int(existing.get("running", 0)),
         "next_run_at": existing.get("next_run_at"),
+        "created_at": existing.get("created_at", now_iso),
+        "updated_at": existing.get("updated_at", now_iso),
     }
 
     for key, value in existing.items():
@@ -703,20 +741,37 @@ def _init_batch_state(
         next_window_seconds=state["next_window_seconds"],
         running=state["running"],
         next_run_at=state["next_run_at"],
+        target_success=state["target_success"],
+        attempts=state["attempts"],
+        created_at=state["created_at"],
+        updated_at=state["updated_at"],
     )
 
 
 def _make_batch_helpers(batch_id: str):
     """返回 add_batch_log 和 update_batch_status 辅助函数"""
     def add_batch_log(msg: str):
-        batch_tasks[batch_id]["logs"].append(msg)
+        logs = batch_tasks[batch_id]["logs"]
+        logs.append(msg)
+        # 防止大批量任务日志无限增长导致内存/前端卡顿。
+        if len(logs) > 2000:
+            del logs[: len(logs) - 2000]
         task_manager.add_batch_log(batch_id, msg)
 
     def update_batch_status(**kwargs):
+        now_iso = datetime.utcnow().isoformat()
+        if "created_at" not in batch_tasks[batch_id]:
+            batch_tasks[batch_id]["created_at"] = now_iso
+        payload = {
+            "updated_at": now_iso,
+            "created_at": batch_tasks[batch_id]["created_at"],
+            **kwargs,
+        }
         for key, value in kwargs.items():
             if key in batch_tasks[batch_id]:
                 batch_tasks[batch_id][key] = value
-        task_manager.update_batch_status(batch_id, **kwargs)
+        batch_tasks[batch_id]["updated_at"] = payload["updated_at"]
+        task_manager.update_batch_status(batch_id, **payload)
 
     return add_batch_log, update_batch_status
 
@@ -903,6 +958,128 @@ def _format_wait_seconds(seconds: int) -> str:
     return "".join(parts) or "1秒"
 
 
+def _build_single_settings_snapshot(request: RegistrationTaskCreate) -> Dict[str, Any]:
+    """构建单任务设置快照，供页面重连恢复。"""
+    return {
+        "registration_mode": "single",
+        "email_service_type": request.email_service_type,
+        "email_service_id": request.email_service_id,
+        "proxy": request.proxy,
+        "auto_upload_cpa": request.auto_upload_cpa,
+        "cpa_service_ids": request.cpa_service_ids,
+        "auto_upload_sub2api": request.auto_upload_sub2api,
+        "sub2api_service_ids": request.sub2api_service_ids,
+        "auto_upload_tm": request.auto_upload_tm,
+        "tm_service_ids": request.tm_service_ids,
+    }
+
+
+def _build_batch_settings_snapshot(
+    request: BatchRegistrationRequest,
+    *,
+    normalized_window_start: Optional[str] = None,
+    normalized_window_end: Optional[str] = None,
+) -> Dict[str, Any]:
+    """构建批量/循环任务设置快照。"""
+    return {
+        "registration_mode": request.registration_mode,
+        "count": request.count,
+        "email_service_type": request.email_service_type,
+        "email_service_id": request.email_service_id,
+        "proxy": request.proxy,
+        "interval_min": request.interval_min,
+        "interval_max": request.interval_max,
+        "concurrency": request.concurrency,
+        "mode": request.mode,
+        "window_start": normalized_window_start if normalized_window_start is not None else request.window_start,
+        "window_end": normalized_window_end if normalized_window_end is not None else request.window_end,
+        "auto_upload_cpa": request.auto_upload_cpa,
+        "cpa_service_ids": request.cpa_service_ids,
+        "auto_upload_sub2api": request.auto_upload_sub2api,
+        "sub2api_service_ids": request.sub2api_service_ids,
+        "auto_upload_tm": request.auto_upload_tm,
+        "tm_service_ids": request.tm_service_ids,
+    }
+
+
+def _build_outlook_batch_settings_snapshot(request: OutlookBatchRegistrationRequest) -> Dict[str, Any]:
+    """构建 Outlook 批量任务设置快照。"""
+    return {
+        "registration_mode": "outlook_batch",
+        "service_ids": request.service_ids,
+        "skip_registered": request.skip_registered,
+        "proxy": request.proxy,
+        "interval_min": request.interval_min,
+        "interval_max": request.interval_max,
+        "concurrency": request.concurrency,
+        "mode": request.mode,
+        "auto_upload_cpa": request.auto_upload_cpa,
+        "cpa_service_ids": request.cpa_service_ids,
+        "auto_upload_sub2api": request.auto_upload_sub2api,
+        "sub2api_service_ids": request.sub2api_service_ids,
+        "auto_upload_tm": request.auto_upload_tm,
+        "tm_service_ids": request.tm_service_ids,
+    }
+
+
+def _is_terminal_status(status: str) -> bool:
+    return status in {"completed", "failed", "cancelled"}
+
+
+def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
+    """解析 ISO 时间字符串，失败时返回 None。"""
+    if not value or not isinstance(value, str):
+        return None
+
+    raw = value.strip()
+    if not raw:
+        return None
+    if raw.endswith("Z"):
+        raw = raw[:-1]
+
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+def _batch_active_sort_key(item: Dict[str, Any]) -> Tuple[int, int, datetime, int]:
+    """批量任务活跃排序键：优先有运行中 worker 的任务，再按状态/时间/活动度排序。"""
+    status = str(item.get("status", ""))
+    status_score = {
+        "running": 4,
+        "target_reached": 3,
+        "waiting_window": 2,
+        "pending": 1,
+    }.get(status, 0)
+    running_score = 1 if int(item.get("running", 0)) > 0 else 0
+    ts = _parse_iso_datetime(item.get("updated_at"))
+    if ts is None:
+        ts = _parse_iso_datetime(item.get("next_run_at"))
+    if ts is None:
+        ts = _parse_iso_datetime(item.get("created_at"))
+    if ts is None:
+        ts = datetime.min
+    activity = int(item.get("attempts", 0)) + int(item.get("current_index", 0))
+    return running_score, status_score, ts, activity
+
+
+def _single_active_sort_key(item: Dict[str, Any]) -> Tuple[int, datetime]:
+    """单任务活跃排序键：按状态和最新更新时间排序。"""
+    status = str(item.get("status", ""))
+    status_score = {
+        "running": 3,
+        "pending": 2,
+        "cancelling": 1,
+    }.get(status, 0)
+    ts = _parse_iso_datetime(item.get("updated_at"))
+    if ts is None:
+        ts = _parse_iso_datetime(item.get("created_at"))
+    if ts is None:
+        ts = datetime.min
+    return status_score, ts
+
+
 async def run_batch_loop(
     batch_id: str,
     email_service_type: str,
@@ -1071,6 +1248,193 @@ async def run_batch_loop(
         batch_tasks[batch_id]["finished"] = True
 
 
+async def run_batch_target_success(
+    batch_id: str,
+    target_success_count: int,
+    email_service_type: str,
+    proxy: Optional[str],
+    email_service_config: Optional[dict],
+    email_service_id: Optional[int],
+    interval_min: int,
+    interval_max: int,
+    concurrency: int,
+    mode: str,
+    auto_upload_cpa: bool = False,
+    cpa_service_ids: Optional[List[int]] = None,
+    auto_upload_sub2api: bool = False,
+    sub2api_service_ids: Optional[List[int]] = None,
+    auto_upload_tm: bool = False,
+    tm_service_ids: Optional[List[int]] = None,
+):
+    """批量模式：以“成功数量”作为完成条件，按需动态创建任务。"""
+    _init_batch_state(batch_id, [], registration_mode="batch")
+    add_batch_log, update_batch_status = _make_batch_helpers(batch_id)
+
+    semaphore = asyncio.Semaphore(concurrency)
+    counter_lock = asyncio.Lock()
+    running_tasks_set: Set[asyncio.Task[Any]] = set()
+    launch_index = int(batch_tasks[batch_id].get("current_index", 0))
+
+    update_batch_status(
+        status="running",
+        finished=False,
+        total=target_success_count,
+        target_success=target_success_count,
+        completed=0,
+        success=0,
+        failed=0,
+        attempts=0,
+        running=0,
+        registration_mode="batch",
+    )
+    add_batch_log(
+        f"[系统] 批量目标成功模式启动，目标成功数: {target_success_count}，"
+        f"并发数: {concurrency}，模式: {mode}"
+    )
+
+    async def _run_and_release(attempt_no: int, task_uuid: str, prefix: str):
+        try:
+            await run_registration_task(
+                task_uuid,
+                email_service_type,
+                proxy,
+                email_service_config,
+                email_service_id,
+                log_prefix=prefix,
+                batch_id=batch_id,
+                auto_upload_cpa=auto_upload_cpa,
+                cpa_service_ids=cpa_service_ids or [],
+                auto_upload_sub2api=auto_upload_sub2api,
+                sub2api_service_ids=sub2api_service_ids or [],
+                auto_upload_tm=auto_upload_tm,
+                tm_service_ids=tm_service_ids or [],
+            )
+
+            with get_db() as db:
+                task = crud.get_registration_task(db, task_uuid)
+
+            async with counter_lock:
+                new_success = batch_tasks[batch_id]["success"]
+                new_failed = batch_tasks[batch_id]["failed"]
+                new_attempts = batch_tasks[batch_id].get("attempts", 0) + 1
+
+                if task and task.status == "completed":
+                    new_success += 1
+                    add_batch_log(
+                        f"{prefix} [成功] 注册成功 (目标进度: {new_success}/{target_success_count})"
+                    )
+                elif task:
+                    new_failed += 1
+                    add_batch_log(f"{prefix} [失败] 注册失败: {task.error_message}")
+                else:
+                    new_failed += 1
+                    add_batch_log(f"{prefix} [失败] 未找到任务结果记录")
+
+                current_running = max(0, batch_tasks[batch_id].get("running", 1) - 1)
+                new_completed = min(new_success, target_success_count)
+
+                update_kwargs: Dict[str, Any] = {
+                    "success": new_success,
+                    "failed": new_failed,
+                    "attempts": new_attempts,
+                    "completed": new_completed,
+                    "running": current_running,
+                }
+
+                if new_success >= target_success_count and not batch_tasks[batch_id].get("cancelled", False):
+                    update_kwargs["status"] = "target_reached"
+
+                update_batch_status(**update_kwargs)
+        finally:
+            semaphore.release()
+
+    try:
+        while True:
+            cancelled = task_manager.is_batch_cancelled(batch_id) or batch_tasks[batch_id].get("cancelled", False)
+            if cancelled:
+                update_batch_status(cancelled=True, status="cancelling")
+                add_batch_log("[取消] 已收到批量任务取消请求，停止发起新任务")
+                break
+
+            if batch_tasks[batch_id].get("success", 0) >= target_success_count:
+                add_batch_log(
+                    f"[系统] 已达到目标成功数 {target_success_count}，等待运行中任务收尾"
+                )
+                break
+
+            await semaphore.acquire()
+
+            cancelled_after_wait = task_manager.is_batch_cancelled(batch_id) or batch_tasks[batch_id].get("cancelled", False)
+            if cancelled_after_wait or batch_tasks[batch_id].get("success", 0) >= target_success_count:
+                semaphore.release()
+                break
+
+            launch_index += 1
+            task_uuid = _create_registration_task_for_loop(proxy)
+            batch_tasks[batch_id]["task_uuids"].append(task_uuid)
+
+            async with counter_lock:
+                new_running = batch_tasks[batch_id].get("running", 0) + 1
+                update_batch_status(current_index=launch_index, running=new_running, status="running")
+
+            prefix = f"[任务{launch_index}]"
+            add_batch_log(f"{prefix} 开始注册...")
+
+            running_task = asyncio.create_task(_run_and_release(launch_index, task_uuid, prefix))
+            running_tasks_set.add(running_task)
+            running_task.add_done_callback(lambda done_task: running_tasks_set.discard(done_task))
+
+            if mode == "pipeline":
+                wait_time = random.randint(interval_min, interval_max)
+                next_run_at = datetime.now() + timedelta(seconds=wait_time)
+                update_batch_status(next_run_at=next_run_at.isoformat())
+
+                remaining = wait_time
+                while remaining > 0:
+                    if task_manager.is_batch_cancelled(batch_id) or batch_tasks[batch_id].get("cancelled", False):
+                        break
+                    if batch_tasks[batch_id].get("success", 0) >= target_success_count:
+                        break
+                    sleep_chunk = min(1, remaining)
+                    await asyncio.sleep(sleep_chunk)
+                    remaining -= sleep_chunk
+            else:
+                update_batch_status(next_run_at=None)
+                await asyncio.sleep(0)
+
+        if running_tasks_set:
+            await asyncio.gather(*list(running_tasks_set), return_exceptions=True)
+
+        success_count = batch_tasks[batch_id].get("success", 0)
+        failed_count = batch_tasks[batch_id].get("failed", 0)
+        attempts = batch_tasks[batch_id].get("attempts", 0)
+
+        if task_manager.is_batch_cancelled(batch_id) or batch_tasks[batch_id].get("cancelled", False):
+            update_batch_status(finished=True, status="cancelled", running=0, next_run_at=None)
+            add_batch_log(
+                f"[完成] 批量任务已取消，目标成功数: {target_success_count}，"
+                f"累计成功: {success_count}，失败: {failed_count}，尝试: {attempts}"
+            )
+        elif success_count >= target_success_count:
+            update_batch_status(finished=True, status="completed", running=0, next_run_at=None)
+            add_batch_log(
+                f"[完成] 已达到目标成功数 {target_success_count}，"
+                f"累计失败: {failed_count}，尝试: {attempts}"
+            )
+        else:
+            update_batch_status(finished=True, status="failed", running=0, next_run_at=None)
+            add_batch_log(
+                f"[错误] 批量任务异常结束，目标成功数: {target_success_count}，"
+                f"累计成功: {success_count}，失败: {failed_count}"
+            )
+    except Exception as e:
+        logger.error(f"批量目标成功任务 {batch_id} 异常: {e}")
+        add_batch_log(f"[错误] 批量目标成功任务异常: {str(e)}")
+        update_batch_status(finished=True, status="failed", running=0, next_run_at=None)
+    finally:
+        batch_tasks[batch_id]["finished"] = True
+
+
 async def run_batch_registration(
     batch_id: str,
     task_uuids: List[str],
@@ -1088,9 +1452,10 @@ async def run_batch_registration(
     sub2api_service_ids: Optional[List[int]] = None,
     auto_upload_tm: bool = False,
     tm_service_ids: Optional[List[int]] = None,
-    registration_mode: str = "batch",
+    registration_mode: str = "fixed",
     window_start: Optional[str] = None,
     window_end: Optional[str] = None,
+    target_success_count: Optional[int] = None,
 ):
     """根据 mode 分发到并行或流水线执行"""
     if registration_mode == "loop":
@@ -1107,6 +1472,29 @@ async def run_batch_registration(
             concurrency=concurrency,
             window_start=window_start,
             window_end=window_end,
+            auto_upload_cpa=auto_upload_cpa,
+            cpa_service_ids=cpa_service_ids,
+            auto_upload_sub2api=auto_upload_sub2api,
+            sub2api_service_ids=sub2api_service_ids,
+            auto_upload_tm=auto_upload_tm,
+            tm_service_ids=tm_service_ids,
+        )
+        return
+
+    if registration_mode == "batch_target_success":
+        if not target_success_count or target_success_count < 1:
+            raise ValueError("批量目标成功模式缺少有效 target_success_count")
+        await run_batch_target_success(
+            batch_id=batch_id,
+            target_success_count=target_success_count,
+            email_service_type=email_service_type,
+            proxy=proxy,
+            email_service_config=email_service_config,
+            email_service_id=email_service_id,
+            interval_min=interval_min,
+            interval_max=interval_max,
+            concurrency=concurrency,
+            mode=mode,
             auto_upload_cpa=auto_upload_cpa,
             cpa_service_ids=cpa_service_ids,
             auto_upload_sub2api=auto_upload_sub2api,
@@ -1160,6 +1548,7 @@ async def start_registration(
 
     # 创建任务
     task_uuid = str(uuid.uuid4())
+    settings_snapshot = _build_single_settings_snapshot(request)
 
     with get_db() as db:
         task = crud.create_registration_task(
@@ -1168,22 +1557,30 @@ async def start_registration(
             proxy=request.proxy
         )
 
-    # 在后台运行注册任务
-    background_tasks.add_task(
-        run_registration_task,
+    task_manager.update_status(
         task_uuid,
-        request.email_service_type,
-        request.proxy,
-        request.email_service_config,
-        request.email_service_id,
-        "",
-        "",
-        request.auto_upload_cpa,
-        request.cpa_service_ids,
-        request.auto_upload_sub2api,
-        request.sub2api_service_ids,
-        request.auto_upload_tm,
-        request.tm_service_ids,
+        "pending",
+        registration_mode="single",
+        settings=settings_snapshot,
+    )
+
+    # 在后台运行注册任务（与请求连接解耦，页面关闭不影响执行）
+    _spawn_detached_coroutine(
+        run_registration_task(
+            task_uuid,
+            request.email_service_type,
+            request.proxy,
+            request.email_service_config,
+            request.email_service_id,
+            "",
+            "",
+            request.auto_upload_cpa,
+            request.cpa_service_ids,
+            request.auto_upload_sub2api,
+            request.sub2api_service_ids,
+            request.auto_upload_tm,
+            request.tm_service_ids,
+        )
     )
 
     return task_to_response(task)
@@ -1197,7 +1594,7 @@ async def start_batch_registration(
     """
     启动批量注册任务
 
-    - count: 注册数量 (1-999999)
+    - count: 目标成功数量 (1-999999)
     - registration_mode: batch(固定批量) 或 loop(循环注册)
     - email_service_type: 邮箱服务类型
     - proxy: 代理地址
@@ -1230,6 +1627,7 @@ async def start_batch_registration(
 
     normalized_window_start = request.window_start
     normalized_window_end = request.window_end
+    settings_snapshot = _build_batch_settings_snapshot(request)
     if request.registration_mode == "loop":
         if not request.window_start or not request.window_end:
             raise HTTPException(status_code=400, detail="循环注册模式必须设置注册时间段")
@@ -1241,6 +1639,12 @@ async def start_batch_registration(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+        settings_snapshot = _build_batch_settings_snapshot(
+            request,
+            normalized_window_start=normalized_window_start,
+            normalized_window_end=normalized_window_end,
+        )
+
         batch_id = str(uuid.uuid4())
         _init_batch_state(
             batch_id,
@@ -1249,9 +1653,73 @@ async def start_batch_registration(
             window_start=normalized_window_start,
             window_end=normalized_window_end,
         )
+        batch_tasks[batch_id]["config_snapshot"] = settings_snapshot
+        task_manager.update_batch_status(batch_id, config_snapshot=settings_snapshot)
 
-        background_tasks.add_task(
-            run_batch_registration,
+        _spawn_detached_coroutine(
+            run_batch_registration(
+                batch_id,
+                [],
+                request.email_service_type,
+                request.proxy,
+                request.email_service_config,
+                request.email_service_id,
+                request.interval_min,
+                request.interval_max,
+                request.concurrency,
+                request.mode,
+                request.auto_upload_cpa,
+                request.cpa_service_ids,
+                request.auto_upload_sub2api,
+                request.sub2api_service_ids,
+                request.auto_upload_tm,
+                request.tm_service_ids,
+                "loop",
+                normalized_window_start,
+                normalized_window_end,
+                None,
+            )
+        )
+
+        return BatchRegistrationResponse(
+            batch_id=batch_id,
+            count=0,
+            tasks=[],
+            registration_mode="loop",
+            window_start=normalized_window_start,
+            window_end=normalized_window_end,
+        )
+
+    # 创建批量任务（目标成功模式：不预创建全部任务，按需调度，避免大批量卡顿）
+    batch_id = str(uuid.uuid4())
+    _init_batch_state(batch_id, [], registration_mode="batch")
+    batch_tasks[batch_id].update({
+        "total": request.count,
+        "target_success": request.count,
+        "completed": 0,
+        "success": 0,
+        "failed": 0,
+        "attempts": 0,
+        "status": "pending",
+        "finished": False,
+        "config_snapshot": settings_snapshot,
+    })
+    task_manager.update_batch_status(
+        batch_id,
+        total=request.count,
+        target_success=request.count,
+        completed=0,
+        success=0,
+        failed=0,
+        attempts=0,
+        status="pending",
+        finished=False,
+        config_snapshot=settings_snapshot,
+    )
+
+    # 在后台运行批量注册（与请求连接解耦）
+    _spawn_detached_coroutine(
+        run_batch_registration(
             batch_id,
             [],
             request.email_service_type,
@@ -1268,66 +1736,17 @@ async def start_batch_registration(
             request.sub2api_service_ids,
             request.auto_upload_tm,
             request.tm_service_ids,
-            "loop",
-            normalized_window_start,
-            normalized_window_end,
+            "batch_target_success",
+            None,
+            None,
+            request.count,
         )
-
-        return BatchRegistrationResponse(
-            batch_id=batch_id,
-            count=0,
-            tasks=[],
-            registration_mode="loop",
-            window_start=normalized_window_start,
-            window_end=normalized_window_end,
-        )
-
-    # 创建批量任务
-    batch_id = str(uuid.uuid4())
-    task_uuids = []
-
-    with get_db() as db:
-        for _ in range(request.count):
-            task_uuid = str(uuid.uuid4())
-            task = crud.create_registration_task(
-                db,
-                task_uuid=task_uuid,
-                proxy=request.proxy
-            )
-            task_uuids.append(task_uuid)
-
-    # 获取所有任务
-    with get_db() as db:
-        tasks = [crud.get_registration_task(db, uuid) for uuid in task_uuids]
-
-    # 在后台运行批量注册
-    background_tasks.add_task(
-        run_batch_registration,
-        batch_id,
-        task_uuids,
-        request.email_service_type,
-        request.proxy,
-        request.email_service_config,
-        request.email_service_id,
-        request.interval_min,
-        request.interval_max,
-        request.concurrency,
-        request.mode,
-        request.auto_upload_cpa,
-        request.cpa_service_ids,
-        request.auto_upload_sub2api,
-        request.sub2api_service_ids,
-        request.auto_upload_tm,
-        request.tm_service_ids,
-        "batch",
-        None,
-        None,
     )
 
     return BatchRegistrationResponse(
         batch_id=batch_id,
         count=request.count,
-        tasks=[task_to_response(t) for t in tasks if t],
+        tasks=[],
         registration_mode="batch",
     )
 
@@ -1342,6 +1761,8 @@ async def get_batch_status(batch_id: str):
     return {
         "batch_id": batch_id,
         "total": batch["total"],
+        "target_success": batch.get("target_success", batch["total"]),
+        "attempts": batch.get("attempts", 0),
         "completed": batch["completed"],
         "success": batch["success"],
         "failed": batch["failed"],
@@ -1356,7 +1777,74 @@ async def get_batch_status(batch_id: str):
         "next_window_seconds": batch.get("next_window_seconds", 0),
         "running": batch.get("running", 0),
         "next_run_at": batch.get("next_run_at"),
+        "created_at": batch.get("created_at"),
+        "updated_at": batch.get("updated_at"),
+        "config_snapshot": batch.get("config_snapshot"),
         "progress": f"{batch['completed']}/{batch['total']}"
+    }
+
+
+@router.get("/active")
+async def get_active_registration_tasks():
+    """获取当前仍在执行的任务（用于浏览器重开后的状态恢复）。"""
+    single_items = []
+    for task_uuid, status_data in task_manager.get_all_task_statuses().items():
+        status = str(status_data.get("status", ""))
+        if not status or _is_terminal_status(status):
+            continue
+        single_items.append({
+            "mode": "single",
+            "task_uuid": task_uuid,
+            "status": status,
+            "settings": status_data.get("settings") or {},
+            "created_at": status_data.get("created_at"),
+            "updated_at": status_data.get("updated_at"),
+        })
+
+    batch_items = []
+    for batch_id, batch in batch_tasks.items():
+        status = str(batch.get("status", "running"))
+        finished = bool(batch.get("finished", False))
+        if finished or _is_terminal_status(status):
+            continue
+
+        batch_items.append({
+            "mode": batch.get("registration_mode", "batch"),
+            "batch_id": batch_id,
+            "status": status,
+            "total": batch.get("total", 0),
+            "target_success": batch.get("target_success", batch.get("total", 0)),
+            "attempts": batch.get("attempts", 0),
+            "success": batch.get("success", 0),
+            "failed": batch.get("failed", 0),
+            "completed": batch.get("completed", 0),
+            "running": batch.get("running", 0),
+            "window_start": batch.get("window_start"),
+            "window_end": batch.get("window_end"),
+            "in_window": batch.get("in_window", True),
+            "next_window_seconds": batch.get("next_window_seconds", 0),
+            "next_run_at": batch.get("next_run_at"),
+            "config_snapshot": batch.get("config_snapshot") or {},
+            "created_at": batch.get("created_at"),
+            "updated_at": batch.get("updated_at"),
+        })
+
+    if batch_items:
+        # 优先恢复批量/循环任务，且优先选择当前最活跃的任务，避免误绑到历史残留任务。
+        batch_items.sort(key=_batch_active_sort_key, reverse=True)
+    if single_items:
+        single_items.sort(key=_single_active_sort_key, reverse=True)
+
+    active_candidates = len(batch_items) + len(single_items)
+    active = None
+    if active_candidates == 1:
+        active = batch_items[0] if batch_items else single_items[0]
+
+    return {
+        "active": active,
+        "active_count": active_candidates,
+        "single_tasks": single_items,
+        "batch_tasks": batch_items,
     }
 
 
@@ -1405,7 +1893,10 @@ async def get_task(task_uuid: str):
         task = crud.get_registration_task(db, task_uuid)
         if not task:
             raise HTTPException(status_code=404, detail="任务不存在")
-        return task_to_response(task)
+
+        status_data = task_manager.get_status(task_uuid) or {}
+        settings_snapshot = status_data.get("settings")
+        return task_to_response(task, settings=settings_snapshot)
 
 
 @router.get("/tasks/{task_uuid}/logs")
@@ -1778,6 +2269,8 @@ async def run_outlook_batch_registration(
         sub2api_service_ids=sub2api_service_ids,
         auto_upload_tm=auto_upload_tm,
         tm_service_ids=tm_service_ids,
+        registration_mode="fixed",
+        target_success_count=None,
     )
 
 
@@ -1814,6 +2307,7 @@ async def start_outlook_batch_registration(
     # 过滤掉已注册的邮箱
     actual_service_ids = request.service_ids
     skipped_count = 0
+    settings_snapshot = _build_outlook_batch_settings_snapshot(request)
 
     if request.skip_registered:
         actual_service_ids = []
@@ -1839,6 +2333,12 @@ async def start_outlook_batch_registration(
                 else:
                     actual_service_ids.append(service_id)
 
+    # 快照中记录“实际执行集合”，避免前端重连时恢复成过滤前的配置。
+    settings_snapshot["service_ids"] = list(actual_service_ids)
+    settings_snapshot["source_service_ids"] = list(request.service_ids)
+    settings_snapshot["skipped"] = skipped_count
+    settings_snapshot["to_register"] = len(actual_service_ids)
+
     if not actual_service_ids:
         return OutlookBatchRegistrationResponse(
             batch_id="",
@@ -1850,6 +2350,7 @@ async def start_outlook_batch_registration(
 
     # 创建批量任务
     batch_id = str(uuid.uuid4())
+    now_iso = datetime.utcnow().isoformat()
 
     # 初始化批量任务状态
     batch_tasks[batch_id] = {
@@ -1860,28 +2361,43 @@ async def start_outlook_batch_registration(
         "skipped": 0,
         "cancelled": False,
         "service_ids": actual_service_ids,
+        "registration_mode": "outlook_batch",
+        "target_success": len(actual_service_ids),
+        "attempts": 0,
+        "config_snapshot": settings_snapshot,
         "current_index": 0,
         "logs": [],
-        "finished": False
+        "finished": False,
+        "created_at": now_iso,
+        "updated_at": now_iso,
     }
-
-    # 在后台运行批量注册
-    background_tasks.add_task(
-        run_outlook_batch_registration,
+    task_manager.init_batch(batch_id, len(actual_service_ids))
+    task_manager.update_batch_status(
         batch_id,
-        actual_service_ids,
-        request.skip_registered,
-        request.proxy,
-        request.interval_min,
-        request.interval_max,
-        request.concurrency,
-        request.mode,
-        request.auto_upload_cpa,
-        request.cpa_service_ids,
-        request.auto_upload_sub2api,
-        request.sub2api_service_ids,
-        request.auto_upload_tm,
-        request.tm_service_ids,
+        registration_mode="outlook_batch",
+        target_success=len(actual_service_ids),
+        attempts=0,
+        config_snapshot=settings_snapshot,
+    )
+
+    # 在后台运行批量注册（与请求连接解耦）
+    _spawn_detached_coroutine(
+        run_outlook_batch_registration(
+            batch_id,
+            actual_service_ids,
+            request.skip_registered,
+            request.proxy,
+            request.interval_min,
+            request.interval_max,
+            request.concurrency,
+            request.mode,
+            request.auto_upload_cpa,
+            request.cpa_service_ids,
+            request.auto_upload_sub2api,
+            request.sub2api_service_ids,
+            request.auto_upload_tm,
+            request.tm_service_ids,
+        )
     )
 
     return OutlookBatchRegistrationResponse(
@@ -1903,6 +2419,8 @@ async def get_outlook_batch_status(batch_id: str):
     return {
         "batch_id": batch_id,
         "total": batch["total"],
+        "target_success": batch.get("target_success", batch["total"]),
+        "attempts": batch.get("attempts", 0),
         "completed": batch["completed"],
         "success": batch["success"],
         "failed": batch["failed"],
@@ -1910,6 +2428,11 @@ async def get_outlook_batch_status(batch_id: str):
         "current_index": batch["current_index"],
         "cancelled": batch["cancelled"],
         "finished": batch.get("finished", False),
+        "status": batch.get("status", "running"),
+        "registration_mode": batch.get("registration_mode", "outlook_batch"),
+        "created_at": batch.get("created_at"),
+        "updated_at": batch.get("updated_at"),
+        "config_snapshot": batch.get("config_snapshot"),
         "logs": batch.get("logs", []),
         "progress": f"{batch['completed']}/{batch['total']}"
     }
