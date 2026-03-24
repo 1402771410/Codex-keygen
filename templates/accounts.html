@@ -61,7 +61,7 @@
                 <a href="/settings" class="nav-link">设置</a>
                 <a href="/logout" class="nav-link">退出</a>
             </div>
-            <button class="theme-toggle" onclick="theme.toggle()" title="切换主题">
+            <button type="button" class="theme-toggle" onclick="theme.toggle()" title="切换主题">
                 🌙
             </button>
         </nav>
@@ -116,20 +116,24 @@
                     </div>
 
                     <div class="toolbar-right">
-                        <button class="btn btn-ghost" id="refresh-btn" title="刷新">
+                        <button type="button" class="btn btn-ghost" id="refresh-btn" title="刷新">
                             🔄 刷新
                         </button>
-                        <button class="btn btn-warning" id="batch-refresh-btn" disabled title="批量刷新Token">
+                        <button type="button" class="btn btn-warning" id="batch-refresh-btn" disabled title="批量刷新Token">
                             🔄 刷新Token
                         </button>
-                        <button class="btn btn-info" id="batch-validate-btn" disabled title="批量验证Token">
+                        <button type="button" class="btn btn-info" id="batch-validate-btn" disabled title="批量验证Token">
                             ✅ 验证Token
                         </button>
-                        <button class="btn btn-info" id="batch-check-sub-btn" disabled title="批量检测订阅状态">
+                        <button type="button" class="btn btn-info" id="batch-check-sub-btn" disabled title="批量检测订阅状态">
                             🔍 检测订阅
                         </button>
+                        <div class="upload-concurrency-control" title="设置批量上传并发数">
+                            <label for="batch-upload-concurrency">上传并发</label>
+                            <input type="number" id="batch-upload-concurrency" min="1" max="20" value="3">
+                        </div>
                         <div class="dropdown">
-                            <button class="btn btn-success" id="batch-upload-btn" disabled>
+                            <button type="button" class="btn btn-success" id="batch-upload-btn" disabled>
                                 ☁️ 上传
                             </button>
                             <div class="dropdown-menu" id="upload-menu">
@@ -138,11 +142,11 @@
                                 <a href="#" class="dropdown-item" id="batch-upload-tm-item">🚀 上传到 Team Manager</a>
                             </div>
                         </div>
-                        <button class="btn btn-danger" id="batch-delete-btn" disabled>
+                        <button type="button" class="btn btn-danger" id="batch-delete-btn" disabled>
                             🗑️ 批量删除
                         </button>
                         <div class="dropdown">
-                            <button class="btn btn-primary" id="export-btn">
+                            <button type="button" class="btn btn-primary" id="export-btn">
                                 📥 导出
                             </button>
                             <div class="dropdown-menu" id="export-menu">
@@ -153,6 +157,53 @@
                             </div>
                         </div>
                     </div>
+                </div>
+            </div>
+
+            <!-- 批量操作实时进度 -->
+            <div class="card batch-progress-card" id="batch-progress-card" style="display: none;">
+                <div class="card-header">
+                    <h3 id="batch-progress-op">批量任务进度</h3>
+                    <div class="batch-progress-actions">
+                        <span class="status-badge running" id="batch-progress-status">进行中</span>
+                        <button type="button" class="btn btn-warning btn-sm" id="batch-progress-cancel-btn" style="display: none;">
+                            取消任务
+                        </button>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="batch-progress-grid">
+                        <div class="batch-progress-item">
+                            <div class="label">总数</div>
+                            <div class="value" id="batch-progress-total">0</div>
+                        </div>
+                        <div class="batch-progress-item">
+                            <div class="label">完成</div>
+                            <div class="value" id="batch-progress-completed">0</div>
+                        </div>
+                        <div class="batch-progress-item">
+                            <div class="label">剩余</div>
+                            <div class="value" id="batch-progress-remaining">0</div>
+                        </div>
+                        <div class="batch-progress-item">
+                            <div class="label">失败</div>
+                            <div class="value danger" id="batch-progress-failed">0</div>
+                        </div>
+                        <div class="batch-progress-item">
+                            <div class="label">进度</div>
+                            <div class="value" id="batch-progress-percent">0%</div>
+                        </div>
+                        <div class="batch-progress-item">
+                            <div class="label">预计完成</div>
+                            <div class="value" id="batch-progress-eta">--</div>
+                        </div>
+                    </div>
+
+                    <div class="progress-bar-container" style="margin-bottom: 8px;">
+                        <div class="progress-bar" id="batch-progress-bar" style="width: 0%"></div>
+                    </div>
+
+                    <div class="batch-progress-hint" id="batch-progress-end-at">预计完成时间：--</div>
                 </div>
             </div>
 
@@ -191,11 +242,11 @@
 
                     <!-- 分页 -->
                     <div class="pagination" id="pagination">
-                        <button class="btn btn-secondary btn-sm" id="prev-page" disabled>
+                        <button type="button" class="btn btn-secondary btn-sm" id="prev-page" disabled>
                             ← 上一页
                         </button>
                         <span id="page-info">第 1 页 / 共 1 页</span>
-                        <button class="btn btn-secondary btn-sm" id="next-page">
+                        <button type="button" class="btn btn-secondary btn-sm" id="next-page">
                             下一页 →
                         </button>
                     </div>
@@ -209,7 +260,7 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h3>📋 账号详情</h3>
-                <button class="modal-close" id="close-modal">&times;</button>
+                <button type="button" class="modal-close" id="close-modal">&times;</button>
             </div>
             <div class="modal-body" id="modal-body">
                 <!-- 动态加载 -->
@@ -222,7 +273,7 @@
         <div class="modal-content" style="max-width: 480px;">
             <div class="modal-header">
                 <h3>☁️ 选择 CPA 服务</h3>
-                <button class="modal-close" id="close-cpa-modal">&times;</button>
+                <button type="button" class="modal-close" id="close-cpa-modal">&times;</button>
             </div>
             <div class="modal-body">
                 <p style="color: var(--text-muted); margin-bottom: 12px; font-size: 0.9rem;">选择要上传到的 CPA 服务，或使用全局配置。</p>
@@ -231,8 +282,8 @@
                 </div>
             </div>
             <div class="modal-footer" style="padding: 12px 20px; border-top: 1px solid var(--border); display: flex; gap: 8px; justify-content: flex-end;">
-                <button class="btn btn-secondary" id="cpa-use-global-btn">使用全局配置</button>
-                <button class="btn btn-secondary" id="cancel-cpa-modal-btn">取消</button>
+                <button type="button" class="btn btn-secondary" id="cpa-use-global-btn">使用全局配置</button>
+                <button type="button" class="btn btn-secondary" id="cancel-cpa-modal-btn">取消</button>
             </div>
         </div>
     </div>
@@ -242,7 +293,7 @@
         <div class="modal-content" style="max-width: 480px;">
             <div class="modal-header">
                 <h3>🚀 选择 Team Manager 服务</h3>
-                <button class="modal-close" id="close-tm-modal">&times;</button>
+                <button type="button" class="modal-close" id="close-tm-modal">&times;</button>
             </div>
             <div class="modal-body">
                 <p style="color: var(--text-muted); margin-bottom: 12px; font-size: 0.9rem;">选择要上传到的 Team Manager 服务，或自动选择第一个启用的服务。</p>
@@ -251,8 +302,8 @@
                 </div>
             </div>
             <div class="modal-footer" style="padding: 12px 20px; border-top: 1px solid var(--border); display: flex; gap: 8px; justify-content: flex-end;">
-                <button class="btn btn-secondary" id="tm-use-auto-btn">自动选择</button>
-                <button class="btn btn-secondary" id="cancel-tm-modal-btn">取消</button>
+                <button type="button" class="btn btn-secondary" id="tm-use-auto-btn">自动选择</button>
+                <button type="button" class="btn btn-secondary" id="cancel-tm-modal-btn">取消</button>
             </div>
         </div>
     </div>
@@ -262,7 +313,7 @@
         <div class="modal-content" style="max-width: 480px;">
             <div class="modal-header">
                 <h3>🔗 选择 Sub2API 服务</h3>
-                <button class="modal-close" id="close-sub2api-modal">&times;</button>
+                <button type="button" class="modal-close" id="close-sub2api-modal">&times;</button>
             </div>
             <div class="modal-body">
                 <p style="color: var(--text-muted); margin-bottom: 12px; font-size: 0.9rem;">选择要上传到的 Sub2API 服务，或自动选择第一个启用的服务。</p>
@@ -271,8 +322,8 @@
                 </div>
             </div>
             <div class="modal-footer" style="padding: 12px 20px; border-top: 1px solid var(--border); display: flex; gap: 8px; justify-content: flex-end;">
-                <button class="btn btn-secondary" id="sub2api-use-auto-btn">自动选择</button>
-                <button class="btn btn-secondary" id="cancel-sub2api-modal-btn">取消</button>
+                <button type="button" class="btn btn-secondary" id="sub2api-use-auto-btn">自动选择</button>
+                <button type="button" class="btn btn-secondary" id="cancel-sub2api-modal-btn">取消</button>
             </div>
         </div>
     </div>

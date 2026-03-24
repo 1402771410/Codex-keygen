@@ -1066,6 +1066,81 @@ body {
 }
 
 /* ============================================
+   账号批量操作实时进度
+   ============================================ */
+
+.batch-progress-card {
+    border-style: dashed;
+}
+
+.batch-progress-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+}
+
+.batch-progress-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: var(--spacing-sm);
+    margin-bottom: var(--spacing-md);
+}
+
+.batch-progress-item {
+    background: var(--surface-hover);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: var(--spacing-sm) var(--spacing-md);
+}
+
+.batch-progress-item .label {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-bottom: 2px;
+}
+
+.batch-progress-item .value {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.batch-progress-item .value.danger {
+    color: var(--danger-color);
+}
+
+.batch-progress-hint {
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+}
+
+.upload-concurrency-control {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--surface-hover);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 6px 8px;
+}
+
+.upload-concurrency-control label {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.upload-concurrency-control input {
+    width: 62px;
+    padding: 4px 6px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text-primary);
+    font-size: 0.8125rem;
+}
+
+/* ============================================
    空状态
    ============================================ */
 
