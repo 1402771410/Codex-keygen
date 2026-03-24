@@ -183,11 +183,18 @@ async function loadServiceSelect(apiPath, container, checkbox, selectGroup) {
 
     if (!services || services.length === 0) {
         checkbox.disabled = true;
+        checkbox.checked = false;
         checkbox.title = '请先在设置中添加对应服务';
         const label = checkbox.closest('label');
         if (label) label.style.opacity = '0.5';
         container.innerHTML = '<div class="msd-empty">暂无可用服务</div>';
+        if (selectGroup) selectGroup.style.display = 'none';
     } else {
+        checkbox.disabled = false;
+        checkbox.checked = true;
+        checkbox.title = '';
+        const label = checkbox.closest('label');
+        if (label) label.style.opacity = '1';
         const items = services.map(s =>
             `<label class="msd-item">
                 <input type="checkbox" value="${s.id}" checked>
@@ -206,11 +213,13 @@ async function loadServiceSelect(apiPath, container, checkbox, selectGroup) {
         container.querySelectorAll('.msd-item input').forEach(cb => {
             cb.addEventListener('change', () => updateMsdLabel(container.id + '-dd'));
         });
+        updateMsdLabel(container.id + '-dd');
         // 点击外部关闭
         document.addEventListener('click', (e) => {
             const dd = document.getElementById(container.id + '-dd');
             if (dd && !dd.contains(e.target)) dd.classList.remove('open');
         }, true);
+        if (selectGroup) selectGroup.style.display = checkbox.checked ? 'block' : 'none';
     }
 
     // 联动显示/隐藏服务选择区
