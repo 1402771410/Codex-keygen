@@ -162,7 +162,9 @@ class LoadingManager {
     }
 
     hideAll() {
-        this.activeLoaders.forEach(element => this.hide(element));
+        this.activeLoaders.forEach((element) => {
+            this.hide(element);
+        });
     }
 }
 
@@ -190,16 +192,62 @@ class ApiClient {
         const timeoutMs = Number(finalOptions.timeoutMs || 0);
         delete finalOptions.timeoutMs;
 
+        const externalSignal = finalOptions.signal || null;
+
         if (finalOptions.body && typeof finalOptions.body === 'object') {
             finalOptions.body = JSON.stringify(finalOptions.body);
         }
 
         let timeoutId = null;
+        let timeoutTriggered = false;
+        let externalAbortTriggered = Boolean(externalSignal?.aborted);
+        let timeoutController = null;
+        let cleanupMergedAbortListeners = null;
         try {
             if (timeoutMs > 0) {
-                const controller = new AbortController();
-                finalOptions.signal = controller.signal;
-                timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+                timeoutController = new AbortController();
+                timeoutId = setTimeout(() => {
+                    timeoutTriggered = true;
+                    timeoutController.abort();
+                }, timeoutMs);
+            }
+
+            if (timeoutController && externalSignal) {
+                if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.any === 'function') {
+                    finalOptions.signal = AbortSignal.any([externalSignal, timeoutController.signal]);
+                } else {
+                    const mergedController = new AbortController();
+                    const onExternalAbort = () => {
+                        externalAbortTriggered = true;
+                        if (!mergedController.signal.aborted) {
+                            mergedController.abort();
+                        }
+                    };
+                    const onTimeoutAbort = () => {
+                        if (!mergedController.signal.aborted) {
+                            mergedController.abort();
+                        }
+                    };
+
+                    externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+                    timeoutController.signal.addEventListener('abort', onTimeoutAbort, { once: true });
+                    cleanupMergedAbortListeners = () => {
+                        externalSignal.removeEventListener('abort', onExternalAbort);
+                        timeoutController.signal.removeEventListener('abort', onTimeoutAbort);
+                    };
+
+                    if (externalSignal.aborted) {
+                        onExternalAbort();
+                    } else if (timeoutController.signal.aborted) {
+                        onTimeoutAbort();
+                    }
+
+                    finalOptions.signal = mergedController.signal;
+                }
+            } else if (timeoutController) {
+                finalOptions.signal = timeoutController.signal;
+            } else if (externalSignal) {
+                finalOptions.signal = externalSignal;
             }
 
             const response = await fetch(url, finalOptions);
@@ -215,8 +263,14 @@ class ApiClient {
             return data;
         } catch (error) {
             if (error.name === 'AbortError') {
-                const timeoutError = new Error('请求超时，请稍后重试');
-                throw timeoutError;
+                const isExternalAbort = externalAbortTriggered || Boolean(externalSignal?.aborted);
+                if (timeoutTriggered && !isExternalAbort) {
+                    const timeoutError = new Error('请求超时，请稍后重试');
+                    throw timeoutError;
+                }
+                const cancelledError = new Error('请求已取消');
+                cancelledError.name = 'AbortError';
+                throw cancelledError;
             }
             // 网络错误处理
             if (!error.response) {
@@ -226,6 +280,9 @@ class ApiClient {
         } finally {
             if (timeoutId) {
                 clearTimeout(timeoutId);
+            }
+            if (cleanupMergedAbortListeners) {
+                cleanupMergedAbortListeners();
             }
         }
     }

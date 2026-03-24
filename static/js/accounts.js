@@ -12,7 +12,15 @@ let isLoading = false;
 let selectAllPages = false;  // 是否选中了全部页
 let currentFilters = { status: '', email_service: '', search: '' };  // 当前筛选条件
 const refreshingAccountIds = new Set();
-let isBatchValidating = false;
+let isBatchOperationRunning = false;
+let batchProgressHideTimer = null;
+let batchCancelRequested = false;
+let activeBatchAbortController = null;
+
+const BATCH_FETCH_PAGE_SIZE = 100;
+const DEFAULT_UPLOAD_CONCURRENCY = 3;
+const MIN_UPLOAD_CONCURRENCY = 1;
+const MAX_UPLOAD_CONCURRENCY = 20;
 
 // DOM 元素
 const elements = {
@@ -38,7 +46,20 @@ const elements = {
     pageInfo: document.getElementById('page-info'),
     detailModal: document.getElementById('detail-modal'),
     modalBody: document.getElementById('modal-body'),
-    closeModal: document.getElementById('close-modal')
+    closeModal: document.getElementById('close-modal'),
+    batchProgressCard: document.getElementById('batch-progress-card'),
+    batchProgressOp: document.getElementById('batch-progress-op'),
+    batchProgressStatus: document.getElementById('batch-progress-status'),
+    batchProgressTotal: document.getElementById('batch-progress-total'),
+    batchProgressCompleted: document.getElementById('batch-progress-completed'),
+    batchProgressRemaining: document.getElementById('batch-progress-remaining'),
+    batchProgressFailed: document.getElementById('batch-progress-failed'),
+    batchProgressPercent: document.getElementById('batch-progress-percent'),
+    batchProgressEta: document.getElementById('batch-progress-eta'),
+    batchProgressEndAt: document.getElementById('batch-progress-end-at'),
+    batchProgressBar: document.getElementById('batch-progress-bar'),
+    batchProgressCancelBtn: document.getElementById('batch-progress-cancel-btn'),
+    batchUploadConcurrency: document.getElementById('batch-upload-concurrency'),
 };
 
 // 初始化
@@ -97,6 +118,19 @@ function initEventListeners() {
 
     // 批量检测订阅
     elements.batchCheckSubBtn.addEventListener('click', handleBatchCheckSubscription);
+
+    if (elements.batchProgressCancelBtn) {
+        elements.batchProgressCancelBtn.addEventListener('click', requestBatchOperationCancel);
+    }
+
+    if (elements.batchUploadConcurrency) {
+        const syncUploadConcurrency = () => {
+            elements.batchUploadConcurrency.value = String(getUploadConcurrencyValue());
+        };
+        elements.batchUploadConcurrency.addEventListener('change', syncUploadConcurrency);
+        elements.batchUploadConcurrency.addEventListener('blur', syncUploadConcurrency);
+        syncUploadConcurrency();
+    }
 
     // 上传下拉菜单
     const uploadMenu = document.getElementById('upload-menu');
@@ -174,7 +208,9 @@ function initEventListeners() {
     document.addEventListener('click', () => {
         elements.exportMenu.classList.remove('active');
         uploadMenu.classList.remove('active');
-        document.querySelectorAll('#accounts-table .dropdown-menu.active').forEach(m => m.classList.remove('active'));
+        document.querySelectorAll('#accounts-table .dropdown-menu.active').forEach((menu) => {
+            menu.classList.remove('active');
+        });
     });
 }
 
@@ -227,22 +263,7 @@ async function loadAccounts() {
     currentFilters.email_service = elements.filterService.value;
     currentFilters.search = elements.searchInput.value.trim();
 
-    const params = new URLSearchParams({
-        page: currentPage,
-        page_size: pageSize,
-    });
-
-    if (currentFilters.status) {
-        params.append('status', currentFilters.status);
-    }
-
-    if (currentFilters.email_service) {
-        params.append('email_service', currentFilters.email_service);
-    }
-
-    if (currentFilters.search) {
-        params.append('search', currentFilters.search);
-    }
+    const params = buildAccountsListParams(currentPage, pageSize);
 
     try {
         const data = await api.get(`/accounts?${params}`);
@@ -474,6 +495,17 @@ function selectAllPagesAction() {
 // 更新批量操作按钮
 function updateBatchButtons() {
     const count = getEffectiveCount();
+
+    if (isBatchOperationRunning) {
+        elements.batchDeleteBtn.disabled = true;
+        elements.batchRefreshBtn.disabled = true;
+        elements.batchValidateBtn.disabled = true;
+        elements.batchUploadBtn.disabled = true;
+        elements.batchCheckSubBtn.disabled = true;
+        elements.exportBtn.disabled = true;
+        return;
+    }
+
     elements.batchDeleteBtn.disabled = count === 0;
     elements.batchRefreshBtn.disabled = count === 0;
     elements.batchValidateBtn.disabled = count === 0;
@@ -486,6 +518,436 @@ function updateBatchButtons() {
     elements.batchValidateBtn.textContent = count > 0 ? `✅ 验证 (${count})` : '✅ 验证Token';
     elements.batchUploadBtn.textContent = count > 0 ? `☁️ 上传 (${count})` : '☁️ 上传';
     elements.batchCheckSubBtn.textContent = count > 0 ? `🔍 检测 (${count})` : '🔍 检测订阅';
+}
+
+function getUploadConcurrencyValue() {
+    const raw = Number(elements.batchUploadConcurrency?.value || DEFAULT_UPLOAD_CONCURRENCY);
+    const normalized = Number.isFinite(raw) ? Math.trunc(raw) : DEFAULT_UPLOAD_CONCURRENCY;
+    return Math.min(MAX_UPLOAD_CONCURRENCY, Math.max(MIN_UPLOAD_CONCURRENCY, normalized));
+}
+
+function updateBatchCancelButtonVisibility(visible) {
+    if (!elements.batchProgressCancelBtn) return;
+    elements.batchProgressCancelBtn.style.display = visible ? 'inline-flex' : 'none';
+    if (visible) {
+        elements.batchProgressCancelBtn.disabled = false;
+    }
+}
+
+function requestBatchOperationCancel() {
+    if (!isBatchOperationRunning) {
+        return;
+    }
+    batchCancelRequested = true;
+    if (activeBatchAbortController && !activeBatchAbortController.signal.aborted) {
+        activeBatchAbortController.abort('user_cancelled');
+    }
+    updateBatchCancelButtonVisibility(false);
+    setBatchProgressStatus('warning', '取消中');
+    if (elements.batchProgressEndAt) {
+        elements.batchProgressEndAt.textContent = '已收到取消请求，正在等待正在执行的任务结束...';
+    }
+    toast.info('已请求取消批量任务，正在停止...');
+}
+
+function formatDurationMs(durationMs) {
+    const ms = Math.max(0, Number(durationMs) || 0);
+    const totalSeconds = Math.round(ms / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+
+    if (hours > 0) {
+        return `${hours}小时${minutes}分钟`;
+    }
+    if (minutes > 0) {
+        return `${minutes}分${seconds}秒`;
+    }
+    return `${seconds}秒`;
+}
+
+function formatClockTime(date) {
+    return date.toLocaleTimeString('zh-CN', { hour12: false });
+}
+
+function clearBatchProgressHideTimer() {
+    if (!batchProgressHideTimer) return;
+    clearTimeout(batchProgressHideTimer);
+    batchProgressHideTimer = null;
+}
+
+function setBatchProgressStatus(statusClass, text) {
+    if (!elements.batchProgressStatus) return;
+    elements.batchProgressStatus.className = `status-badge ${statusClass}`;
+    elements.batchProgressStatus.textContent = text;
+}
+
+function showBatchProgressPanel(operationName, total) {
+    if (!elements.batchProgressCard) return;
+
+    clearBatchProgressHideTimer();
+    elements.batchProgressCard.style.display = 'block';
+    if (elements.batchProgressOp) {
+        elements.batchProgressOp.textContent = operationName;
+    }
+    if (elements.batchProgressTotal) {
+        elements.batchProgressTotal.textContent = format.number(total);
+    }
+
+    updateBatchCancelButtonVisibility(true);
+
+    setBatchProgressStatus('running', '进行中');
+}
+
+function updateBatchProgressPanel(progress) {
+    if (!elements.batchProgressCard) return;
+
+    const total = Math.max(0, Number(progress.total) || 0);
+    const completed = Math.min(total, Math.max(0, Number(progress.completed) || 0));
+    const failed = Math.max(0, Number(progress.failed) || 0);
+    const remaining = Math.max(total - completed, 0);
+    const percent = total > 0 ? Math.min(100, (completed / total) * 100) : 0;
+    const roundedPercent = Math.round(percent * 10) / 10;
+
+    if (elements.batchProgressTotal) {
+        elements.batchProgressTotal.textContent = format.number(total);
+    }
+    if (elements.batchProgressCompleted) {
+        elements.batchProgressCompleted.textContent = format.number(completed);
+    }
+    if (elements.batchProgressRemaining) {
+        elements.batchProgressRemaining.textContent = format.number(remaining);
+    }
+    if (elements.batchProgressFailed) {
+        elements.batchProgressFailed.textContent = format.number(failed);
+    }
+    if (elements.batchProgressPercent) {
+        elements.batchProgressPercent.textContent = `${roundedPercent}%`;
+    }
+    if (elements.batchProgressBar) {
+        elements.batchProgressBar.style.width = `${roundedPercent}%`;
+    }
+
+    let etaText = '计算中...';
+    let finishAtText = '预计完成时间：--';
+
+    if (remaining === 0 && total > 0) {
+        etaText = '0秒';
+        finishAtText = `完成时间：${formatClockTime(new Date())}`;
+    } else if (completed > 0) {
+        const elapsedMs = Date.now() - progress.startAt;
+        const avgMs = elapsedMs / completed;
+        const etaMs = Math.max(0, Math.round(avgMs * remaining));
+        const etaAt = new Date(Date.now() + etaMs);
+        etaText = formatDurationMs(etaMs);
+        finishAtText = `预计完成时间：${formatClockTime(etaAt)}`;
+    }
+
+    if (elements.batchProgressEta) {
+        elements.batchProgressEta.textContent = etaText;
+    }
+    if (elements.batchProgressEndAt) {
+        elements.batchProgressEndAt.textContent = finishAtText;
+    }
+}
+
+function finalizeBatchProgressPanel(statusClass, statusText, summaryText) {
+    updateBatchCancelButtonVisibility(false);
+    setBatchProgressStatus(statusClass, statusText);
+    if (elements.batchProgressEndAt && summaryText) {
+        elements.batchProgressEndAt.textContent = summaryText;
+    }
+}
+
+function setBatchOperationLock(locked, activeButton = null, activeText = '') {
+    isBatchOperationRunning = locked;
+
+    if (!locked) {
+        batchCancelRequested = false;
+        activeBatchAbortController = null;
+    }
+
+    if (activeButton) {
+        if (locked) {
+            activeButton.dataset.originalText = activeButton.textContent;
+            if (activeText) {
+                activeButton.textContent = activeText;
+            }
+        } else if (activeButton.dataset.originalText) {
+            activeButton.textContent = activeButton.dataset.originalText;
+            delete activeButton.dataset.originalText;
+        }
+    }
+
+    const uploadMenuIds = [
+        'batch-upload-cpa-item',
+        'batch-upload-sub2api-item',
+        'batch-upload-tm-item',
+    ];
+    uploadMenuIds.forEach((menuId) => {
+        const menuItem = document.getElementById(menuId);
+        if (!menuItem) return;
+
+        menuItem.style.pointerEvents = locked ? 'none' : '';
+        menuItem.style.opacity = locked ? '0.5' : '';
+        menuItem.setAttribute('aria-disabled', locked ? 'true' : 'false');
+    });
+
+    if (elements.batchUploadConcurrency) {
+        elements.batchUploadConcurrency.disabled = locked;
+    }
+
+    updateBatchButtons();
+}
+
+function buildAccountsListParams(page, pageSizeValue = pageSize) {
+    const params = new URLSearchParams({
+        page: String(page),
+        page_size: String(pageSizeValue),
+    });
+
+    if (currentFilters.status) {
+        params.append('status', currentFilters.status);
+    }
+    if (currentFilters.email_service) {
+        params.append('email_service', currentFilters.email_service);
+    }
+    if (currentFilters.search) {
+        params.append('search', currentFilters.search);
+    }
+
+    return params;
+}
+
+async function fetchAllFilteredAccountIds(signal = null) {
+    const idSet = new Set();
+    let page = 1;
+    let total = 0;
+
+    while (true) {
+        if (signal?.aborted) {
+            break;
+        }
+        const params = buildAccountsListParams(page, BATCH_FETCH_PAGE_SIZE);
+        const data = await api.get(`/accounts?${params}`, { signal });
+        const accounts = Array.isArray(data.accounts) ? data.accounts : [];
+        total = Number(data.total || total || 0);
+
+        accounts.forEach((account) => {
+            const accountId = Number(account?.id);
+            if (Number.isFinite(accountId)) {
+                idSet.add(accountId);
+            }
+        });
+
+        if (accounts.length === 0 || idSet.size >= total) {
+            break;
+        }
+        page += 1;
+    }
+
+    return Array.from(idSet);
+}
+
+async function resolveBatchAccountIds(signal = null) {
+    if (!selectAllPages) {
+        return Array.from(selectedAccounts);
+    }
+
+    return fetchAllFilteredAccountIds(signal);
+}
+
+async function runBatchOperationWithProgress({
+    operationName,
+    actionButton,
+    actionRunningText,
+    confirmMessage,
+    concurrency = 1,
+    executeOne,
+}) {
+    if (isBatchOperationRunning) {
+        toast.info('已有批量任务正在执行，请稍候完成。');
+        return null;
+    }
+
+    const expectedCount = getEffectiveCount();
+    if (expectedCount === 0) {
+        toast.warning('请先选择要操作的账号');
+        return null;
+    }
+
+    if (confirmMessage) {
+        const confirmed = await confirm(confirmMessage);
+        if (!confirmed) {
+            return null;
+        }
+    }
+
+    const progress = {
+        total: 0,
+        completed: 0,
+        failed: 0,
+        skipped: 0,
+        startAt: Date.now(),
+    };
+
+    const normalizedConcurrency = Math.max(1, Math.trunc(Number(concurrency) || 1));
+    activeBatchAbortController = new AbortController();
+
+    setBatchOperationLock(true, actionButton, actionRunningText);
+    showBatchProgressPanel(operationName, expectedCount);
+    setBatchProgressStatus('pending', '准备中');
+    if (elements.batchProgressEta) {
+        elements.batchProgressEta.textContent = '计算中...';
+    }
+    if (elements.batchProgressEndAt) {
+        elements.batchProgressEndAt.textContent = '正在整理待处理账号...';
+    }
+
+    try {
+        let accountIds = [];
+        try {
+            accountIds = await resolveBatchAccountIds(activeBatchAbortController?.signal);
+        } catch (error) {
+            if (batchCancelRequested || error?.name === 'AbortError') {
+                const cancelledSummary = {
+                    total: expectedCount,
+                    completed: 0,
+                    successCount: 0,
+                    failedCount: 0,
+                    skippedCount: 0,
+                    cancelled: true,
+                    cancelledCount: expectedCount,
+                    details: [],
+                };
+                finalizeBatchProgressPanel('disabled', '已取消', `已取消：完成 0/${expectedCount}，失败 0，剩余 ${expectedCount}`);
+                return cancelledSummary;
+            }
+            throw error;
+        }
+
+        if (batchCancelRequested) {
+            const cancelledSummary = {
+                total: accountIds.length || expectedCount,
+                completed: 0,
+                successCount: 0,
+                failedCount: 0,
+                skippedCount: 0,
+                cancelled: true,
+                cancelledCount: accountIds.length || expectedCount,
+                details: [],
+            };
+            finalizeBatchProgressPanel('disabled', '已取消', `已取消：完成 0/${cancelledSummary.total}，失败 0，剩余 ${cancelledSummary.cancelledCount}`);
+            return cancelledSummary;
+        }
+
+        if (accountIds.length === 0) {
+            toast.warning('未找到可执行的账号');
+            return null;
+        }
+
+        progress.total = accountIds.length;
+        progress.startAt = Date.now();
+        batchCancelRequested = false;
+
+        showBatchProgressPanel(operationName, progress.total);
+        updateBatchProgressPanel(progress);
+
+        const details = [];
+
+        let nextIndex = 0;
+        const workerCount = Math.min(normalizedConcurrency, accountIds.length);
+
+        const runWorker = async () => {
+            while (true) {
+                if (batchCancelRequested) {
+                    return;
+                }
+
+                const currentIndex = nextIndex;
+                nextIndex += 1;
+
+                if (currentIndex >= accountIds.length) {
+                    return;
+                }
+
+                const accountId = accountIds[currentIndex];
+
+                try {
+                    const result = await executeOne(accountId, {
+                        signal: activeBatchAbortController?.signal,
+                    });
+                    const success = Boolean(result?.success);
+                    const skipped = Boolean(result?.skipped);
+                    const message = result?.message || result?.error || '';
+
+                    if (skipped) {
+                        progress.skipped += 1;
+                    } else if (!success) {
+                        progress.failed += 1;
+                    }
+
+                    details.push({
+                        id: accountId,
+                        success,
+                        skipped,
+                        message,
+                    });
+
+                    progress.completed += 1;
+                    updateBatchProgressPanel(progress);
+                } catch (error) {
+                    const isAbortError = error?.name === 'AbortError';
+                    if (batchCancelRequested || isAbortError) {
+                        return;
+                    }
+
+                    progress.failed += 1;
+                    details.push({
+                        id: accountId,
+                        success: false,
+                        skipped: false,
+                        message: error.message || '未知错误',
+                    });
+
+                    progress.completed += 1;
+                    updateBatchProgressPanel(progress);
+                }
+            }
+        };
+
+        await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+
+        const cancelled = batchCancelRequested;
+        const cancelledCount = Math.max(progress.total - progress.completed, 0);
+
+        const successCount = progress.completed - progress.failed - progress.skipped;
+        const summary = {
+            total: progress.total,
+            completed: progress.completed,
+            successCount,
+            failedCount: progress.failed,
+            skippedCount: progress.skipped,
+            cancelled,
+            cancelledCount,
+            details,
+        };
+
+        const statusClass = cancelled ? 'disabled' : (progress.failed > 0 ? 'warning' : 'completed');
+        const statusText = cancelled ? '已取消' : (progress.failed > 0 ? '部分失败' : '已完成');
+        const summaryText = cancelled
+            ? `已取消：完成 ${summary.completed}/${summary.total}，失败 ${summary.failedCount}，剩余 ${summary.cancelledCount}`
+            : `完成 ${summary.completed}/${summary.total}，成功 ${summary.successCount}，失败 ${summary.failedCount}，跳过 ${summary.skippedCount}`;
+        finalizeBatchProgressPanel(statusClass, statusText, summaryText);
+
+        return summary;
+    } catch (error) {
+        finalizeBatchProgressPanel('failed', '失败', `执行失败：${error.message || '未知错误'}`);
+        toast.error(`${operationName}失败：${error.message || '未知错误'}`);
+        return null;
+    } finally {
+        setBatchOperationLock(false, actionButton);
+    }
 }
 
 // 刷新单个账号Token
@@ -516,48 +978,73 @@ async function refreshToken(id) {
 // 批量刷新Token
 async function handleBatchRefresh() {
     const count = getEffectiveCount();
-    if (count === 0) return;
+    const summary = await runBatchOperationWithProgress({
+        operationName: '批量刷新 Token',
+        actionButton: elements.batchRefreshBtn,
+        actionRunningText: '刷新中...',
+        confirmMessage: `确定要刷新选中的 ${count} 个账号的Token吗？`,
+        executeOne: async (accountId, { signal } = {}) => {
+            const result = await api.post(`/accounts/${accountId}/refresh`, {}, { timeoutMs: 120000, signal });
+            return {
+                success: Boolean(result?.success),
+                message: result?.error || result?.message || '',
+            };
+        },
+    });
 
-    const confirmed = await confirm(`确定要刷新选中的 ${count} 个账号的Token吗？`);
-    if (!confirmed) return;
-
-    elements.batchRefreshBtn.disabled = true;
-    elements.batchRefreshBtn.textContent = '刷新中...';
-
-    try {
-        const result = await api.post('/accounts/batch-refresh', buildBatchPayload());
-        toast.success(`成功刷新 ${result.success_count} 个，失败 ${result.failed_count} 个`);
-        loadAccounts();
-    } catch (error) {
-        toast.error('批量刷新失败: ' + error.message);
-    } finally {
-        updateBatchButtons();
+    if (!summary) {
+        return;
     }
+
+    if (summary.cancelled) {
+        toast.warning(`刷新已取消：已完成 ${summary.completed}/${summary.total}，剩余 ${summary.cancelledCount}`);
+        loadAccounts();
+        return;
+    }
+
+    const message = `刷新完成：总数 ${summary.total}，成功 ${summary.successCount}，失败 ${summary.failedCount}`;
+    if (summary.failedCount > 0) {
+        toast.warning(message);
+    } else {
+        toast.success(message);
+    }
+
+    loadAccounts();
 }
 
 // 批量验证Token
 async function handleBatchValidate() {
-    if (getEffectiveCount() === 0) return;
-    if (isBatchValidating) {
-        toast.info('批量验证进行中，请稍候...');
+    const summary = await runBatchOperationWithProgress({
+        operationName: '批量验证 Token',
+        actionButton: elements.batchValidateBtn,
+        actionRunningText: '验证中...',
+        executeOne: async (accountId, { signal } = {}) => {
+            const result = await api.post(`/accounts/${accountId}/validate`, {}, { timeoutMs: 120000, signal });
+            return {
+                success: Boolean(result?.valid),
+                message: result?.error || '',
+            };
+        },
+    });
+
+    if (!summary) {
         return;
     }
 
-    isBatchValidating = true;
-
-    elements.batchValidateBtn.disabled = true;
-    elements.batchValidateBtn.textContent = '验证中...';
-
-    try {
-        const result = await api.post('/accounts/batch-validate', buildBatchPayload(), { timeoutMs: 120000 });
-        toast.info(`有效: ${result.valid_count}，无效: ${result.invalid_count}`);
+    if (summary.cancelled) {
+        toast.warning(`验证已取消：已完成 ${summary.completed}/${summary.total}，剩余 ${summary.cancelledCount}`);
         loadAccounts();
-    } catch (error) {
-        toast.error('批量验证失败: ' + error.message);
-    } finally {
-        isBatchValidating = false;
-        updateBatchButtons();
+        return;
     }
+
+    const message = `验证完成：总数 ${summary.total}，有效 ${summary.successCount}，无效 ${summary.failedCount}`;
+    if (summary.failedCount > 0) {
+        toast.warning(message);
+    } else {
+        toast.success(message);
+    }
+
+    loadAccounts();
 }
 
 // 查看账号详情
@@ -770,7 +1257,8 @@ function escapeHtml(text) {
 // 弹出 CPA 服务选择框，返回 Promise<{cpa_service_id: number|null}|null>
 // null 表示用户取消，{cpa_service_id: null} 表示使用全局配置
 function selectCpaService() {
-    return new Promise(async (resolve) => {
+    return new Promise((resolve) => {
+        (async () => {
         const modal = document.getElementById('cpa-service-modal');
         const listEl = document.getElementById('cpa-service-list');
         const closeBtn = document.getElementById('close-cpa-modal');
@@ -832,6 +1320,7 @@ function selectCpaService() {
         closeBtn.addEventListener('click', onCancel);
         cancelBtn.addEventListener('click', onCancel);
         globalBtn.addEventListener('click', onGlobal);
+        })();
     });
 }
 
@@ -902,28 +1391,43 @@ async function handleBatchUploadCpa() {
     const choice = await selectCpaService();
     if (choice === null) return;  // 用户取消
 
-    const confirmed = await confirm(`确定要将选中的 ${count} 个账号上传到CPA吗？`);
-    if (!confirmed) return;
+    const summary = await runBatchOperationWithProgress({
+        operationName: '批量上传到 CPA',
+        actionButton: elements.batchUploadBtn,
+        actionRunningText: '上传中...',
+        concurrency: getUploadConcurrencyValue(),
+        confirmMessage: `确定要将选中的 ${count} 个账号上传到CPA吗？`,
+        executeOne: async (accountId, { signal } = {}) => {
+            const payload = {};
+            if (choice.cpa_service_id != null) {
+                payload.cpa_service_id = choice.cpa_service_id;
+            }
+            const result = await api.post(`/accounts/${accountId}/upload-cpa`, payload, { timeoutMs: 120000, signal });
+            return {
+                success: Boolean(result?.success),
+                message: result?.error || result?.message || '',
+            };
+        },
+    });
 
-    elements.batchUploadBtn.disabled = true;
-    elements.batchUploadBtn.textContent = '上传中...';
-
-    try {
-        const payload = buildBatchPayload();
-        if (choice.cpa_service_id != null) payload.cpa_service_id = choice.cpa_service_id;
-        const result = await api.post('/accounts/batch-upload-cpa', payload);
-
-        let message = `成功: ${result.success_count}`;
-        if (result.failed_count > 0) message += `, 失败: ${result.failed_count}`;
-        if (result.skipped_count > 0) message += `, 跳过: ${result.skipped_count}`;
-
-        toast.success(message);
-        loadAccounts();
-    } catch (error) {
-        toast.error('批量上传失败: ' + error.message);
-    } finally {
-        updateBatchButtons();
+    if (!summary) {
+        return;
     }
+
+    if (summary.cancelled) {
+        toast.warning(`上传已取消：已完成 ${summary.completed}/${summary.total}，剩余 ${summary.cancelledCount}`);
+        loadAccounts();
+        return;
+    }
+
+    const message = `上传完成：总数 ${summary.total}，成功 ${summary.successCount}，失败 ${summary.failedCount}`;
+    if (summary.failedCount > 0) {
+        toast.warning(message);
+    } else {
+        toast.success(message);
+    }
+
+    loadAccounts();
 }
 
 // ============== 订阅状态 ==============
@@ -951,23 +1455,41 @@ async function markSubscription(id) {
 async function handleBatchCheckSubscription() {
     const count = getEffectiveCount();
     if (count === 0) return;
-    const confirmed = await confirm(`确定要检测选中的 ${count} 个账号的订阅状态吗？`);
-    if (!confirmed) return;
+    const summary = await runBatchOperationWithProgress({
+        operationName: '批量检测订阅',
+        actionButton: elements.batchCheckSubBtn,
+        actionRunningText: '检测中...',
+        confirmMessage: `确定要检测选中的 ${count} 个账号的订阅状态吗？`,
+        executeOne: async (accountId, { signal } = {}) => {
+            const result = await api.post('/payment/accounts/batch-check-subscription', { ids: [accountId] }, { timeoutMs: 120000, signal });
+            const details = Array.isArray(result?.details) ? result.details : [];
+            const first = details[0] || null;
+            const success = first ? Boolean(first.success) : Number(result?.failed_count || 0) === 0;
+            return {
+                success,
+                message: first?.error || '',
+            };
+        },
+    });
 
-    elements.batchCheckSubBtn.disabled = true;
-    elements.batchCheckSubBtn.textContent = '检测中...';
-
-    try {
-        const result = await api.post('/payment/accounts/batch-check-subscription', buildBatchPayload());
-        let message = `成功: ${result.success_count}`;
-        if (result.failed_count > 0) message += `, 失败: ${result.failed_count}`;
-        toast.success(message);
-        loadAccounts();
-    } catch (e) {
-        toast.error('批量检测失败: ' + e.message);
-    } finally {
-        updateBatchButtons();
+    if (!summary) {
+        return;
     }
+
+    if (summary.cancelled) {
+        toast.warning(`检测已取消：已完成 ${summary.completed}/${summary.total}，剩余 ${summary.cancelledCount}`);
+        loadAccounts();
+        return;
+    }
+
+    const message = `检测完成：总数 ${summary.total}，成功 ${summary.successCount}，失败 ${summary.failedCount}`;
+    if (summary.failedCount > 0) {
+        toast.warning(message);
+    } else {
+        toast.success(message);
+    }
+
+    loadAccounts();
 }
 
 // ============== Sub2API 上传 ==============
@@ -975,7 +1497,8 @@ async function handleBatchCheckSubscription() {
 // 弹出 Sub2API 服务选择框，返回 Promise<{service_id: number|null}|null>
 // null 表示用户取消，{service_id: null} 表示自动选择
 function selectSub2ApiService() {
-    return new Promise(async (resolve) => {
+    return new Promise((resolve) => {
+        (async () => {
         const modal = document.getElementById('sub2api-service-modal');
         const listEl = document.getElementById('sub2api-service-list');
         const closeBtn = document.getElementById('close-sub2api-modal');
@@ -1036,6 +1559,7 @@ function selectSub2ApiService() {
         closeBtn.addEventListener('click', onCancel);
         cancelBtn.addEventListener('click', onCancel);
         autoBtn.addEventListener('click', onAuto);
+        })();
     });
 }
 
@@ -1047,28 +1571,43 @@ async function handleBatchUploadSub2Api() {
     const choice = await selectSub2ApiService();
     if (choice === null) return;  // 用户取消
 
-    const confirmed = await confirm(`确定要将选中的 ${count} 个账号上传到 Sub2API 吗？`);
-    if (!confirmed) return;
+    const summary = await runBatchOperationWithProgress({
+        operationName: '批量上传到 Sub2API',
+        actionButton: elements.batchUploadBtn,
+        actionRunningText: '上传中...',
+        concurrency: getUploadConcurrencyValue(),
+        confirmMessage: `确定要将选中的 ${count} 个账号上传到 Sub2API 吗？`,
+        executeOne: async (accountId, { signal } = {}) => {
+            const payload = {};
+            if (choice.service_id != null) {
+                payload.service_id = choice.service_id;
+            }
+            const result = await api.post(`/accounts/${accountId}/upload-sub2api`, payload, { timeoutMs: 120000, signal });
+            return {
+                success: Boolean(result?.success),
+                message: result?.error || result?.message || '',
+            };
+        },
+    });
 
-    elements.batchUploadBtn.disabled = true;
-    elements.batchUploadBtn.textContent = '上传中...';
-
-    try {
-        const payload = buildBatchPayload();
-        if (choice.service_id != null) payload.service_id = choice.service_id;
-        const result = await api.post('/accounts/batch-upload-sub2api', payload);
-
-        let message = `成功: ${result.success_count}`;
-        if (result.failed_count > 0) message += `, 失败: ${result.failed_count}`;
-        if (result.skipped_count > 0) message += `, 跳过: ${result.skipped_count}`;
-
-        toast.success(message);
-        loadAccounts();
-    } catch (error) {
-        toast.error('批量上传失败: ' + error.message);
-    } finally {
-        updateBatchButtons();
+    if (!summary) {
+        return;
     }
+
+    if (summary.cancelled) {
+        toast.warning(`上传已取消：已完成 ${summary.completed}/${summary.total}，剩余 ${summary.cancelledCount}`);
+        loadAccounts();
+        return;
+    }
+
+    const message = `上传完成：总数 ${summary.total}，成功 ${summary.successCount}，失败 ${summary.failedCount}`;
+    if (summary.failedCount > 0) {
+        toast.warning(message);
+    } else {
+        toast.success(message);
+    }
+
+    loadAccounts();
 }
 
 // ============== Team Manager 上传 ==============
@@ -1096,7 +1635,8 @@ async function uploadToSub2Api(id) {
 // 弹出 Team Manager 服务选择框，返回 Promise<{service_id: number|null}|null>
 // null 表示用户取消，{service_id: null} 表示自动选择
 function selectTmService() {
-    return new Promise(async (resolve) => {
+    return new Promise((resolve) => {
+        (async () => {
         const modal = document.getElementById('tm-service-modal');
         const listEl = document.getElementById('tm-service-list');
         const closeBtn = document.getElementById('close-tm-modal');
@@ -1157,6 +1697,7 @@ function selectTmService() {
         closeBtn.addEventListener('click', onCancel);
         cancelBtn.addEventListener('click', onCancel);
         autoBtn.addEventListener('click', onAuto);
+        })();
     });
 }
 
@@ -1187,26 +1728,43 @@ async function handleBatchUploadTm() {
     const choice = await selectTmService();
     if (choice === null) return;  // 用户取消
 
-    const confirmed = await confirm(`确定要将选中的 ${count} 个账号上传到 Team Manager 吗？`);
-    if (!confirmed) return;
+    const summary = await runBatchOperationWithProgress({
+        operationName: '批量上传到 Team Manager',
+        actionButton: elements.batchUploadBtn,
+        actionRunningText: '上传中...',
+        concurrency: getUploadConcurrencyValue(),
+        confirmMessage: `确定要将选中的 ${count} 个账号上传到 Team Manager 吗？`,
+        executeOne: async (accountId, { signal } = {}) => {
+            const payload = {};
+            if (choice.service_id != null) {
+                payload.service_id = choice.service_id;
+            }
+            const result = await api.post(`/accounts/${accountId}/upload-tm`, payload, { timeoutMs: 120000, signal });
+            return {
+                success: Boolean(result?.success),
+                message: result?.error || result?.message || '',
+            };
+        },
+    });
 
-    elements.batchUploadBtn.disabled = true;
-    elements.batchUploadBtn.textContent = '上传中...';
-
-    try {
-        const payload = buildBatchPayload();
-        if (choice.service_id != null) payload.service_id = choice.service_id;
-        const result = await api.post('/accounts/batch-upload-tm', payload);
-        let message = `成功: ${result.success_count}`;
-        if (result.failed_count > 0) message += `, 失败: ${result.failed_count}`;
-        if (result.skipped_count > 0) message += `, 跳过: ${result.skipped_count}`;
-        toast.success(message);
-        loadAccounts();
-    } catch (e) {
-        toast.error('批量上传失败: ' + e.message);
-    } finally {
-        updateBatchButtons();
+    if (!summary) {
+        return;
     }
+
+    if (summary.cancelled) {
+        toast.warning(`上传已取消：已完成 ${summary.completed}/${summary.total}，剩余 ${summary.cancelledCount}`);
+        loadAccounts();
+        return;
+    }
+
+    const message = `上传完成：总数 ${summary.total}，成功 ${summary.successCount}，失败 ${summary.failedCount}`;
+    if (summary.failedCount > 0) {
+        toast.warning(message);
+    } else {
+        toast.success(message);
+    }
+
+    loadAccounts();
 }
 
 // 更多菜单切换
@@ -1214,7 +1772,9 @@ function toggleMoreMenu(btn) {
     const menu = btn.nextElementSibling;
     const isActive = menu.classList.contains('active');
     // 关闭所有其他更多菜单
-    document.querySelectorAll('.dropdown-menu.active').forEach(m => m.classList.remove('active'));
+    document.querySelectorAll('.dropdown-menu.active').forEach((menuItem) => {
+        menuItem.classList.remove('active');
+    });
     if (!isActive) menu.classList.add('active');
 }
 
