@@ -1,6 +1,6 @@
-# OpenAI 账号管理系统 v2
+# Codex-keygen
 
-管理 OpenAI 账号的 Web UI 系统，支持多种邮箱服务、并发批量注册、代理管理和账号管理。
+Codex-keygen 是一个 OpenAI 账号管理 Web UI 工具，支持临时邮箱池规则、并发批量注册、代理管理和账号管理。
 
 # 本次更改依据工程修改而来，地址：https://github.com/cnlimiter/codex-manager  
 
@@ -11,19 +11,16 @@
 
 ## 功能特性
 
-- **多邮箱服务支持**
-  - Tempmail.lol（临时邮箱，无需配置）
-  - Outlook（IMAP + XOAUTH2，支持批量导入）
-  - 自定义域名（两种子类型）
-    - **MoeMail**：标准 REST API，配置 API 地址 + API 密钥
-    - **TempMail**：自部署 Cloudflare Worker 临时邮箱，配置 Worker 地址 + Admin 密码
-  - DuckMail
-    - **DuckMail API**：兼容 DuckMail 接口，手动填写 API 地址、默认域名，可选 API Key
+- **临时邮箱池支持（Tempmail-only）**
+  - 全局临时邮箱开关与默认 API 地址
+  - 临时邮箱规则管理（前缀规则、优先域名、独立 API、超时、重试）
+  - 规则启用/禁用与优先级控制
+  - 注册时按 `last_used + priority` 自动轮询
 
 - **注册模式**
   - 单次注册
   - 批量注册（可配置数量和间隔时间）
-  - Outlook 批量注册（指定账户逐一注册）
+  - 循环注册（按时间窗口持续执行）
 
 - **并发控制**
   - 流水线模式（Pipeline）：每隔 interval 秒启动新任务，限制最大并发数
@@ -63,7 +60,7 @@
   - CPA 服务列表管理（多服务，连接测试）
   - Sub2API 服务列表管理（多服务，连接测试）
   - Team Manager 服务列表管理（多服务，连接测试）
-  - Outlook OAuth 参数
+  - 临时邮箱池管理入口
   - 注册参数（超时、重试、密码长度等）
   - 验证码等待配置
   - 数据库管理（备份、清理）
@@ -86,6 +83,161 @@ uv sync
 pip install -r requirements.txt
 ```
 
+### 一步到位命令（拉取 + 进入目录 + 安装）
+
+> 如果你是首次部署，直接执行下面一条命令即可完成「拉取仓库 + 进入目录 + 启动安装流程」。
+
+#### Windows（PowerShell / CMD）
+
+```powershell
+git clone https://github.com/1402771410/Codex-Manager.git Codex-keygen && cd Codex-keygen && .\keygen.bat install
+```
+
+#### macOS / Linux（Bash）
+
+```bash
+git clone https://github.com/1402771410/Codex-Manager.git Codex-keygen && cd Codex-keygen && chmod +x keygen && ./keygen install
+```
+
+### 一步到位升级命令（拉取更新 + 升级）
+
+#### Windows（PowerShell / CMD）
+
+```powershell
+cd Codex-keygen && git pull --ff-only && .\keygen.bat upgrade
+```
+
+#### macOS / Linux（Bash）
+
+```bash
+cd Codex-keygen && git pull --ff-only && ./keygen upgrade
+```
+
+### 统一命令入口：`keygen`
+
+> 目标：安装、升级、打包、配置都走同一命令族（`keygen`）。
+
+#### 各终端命令入口
+
+| 平台 | 命令入口 | 说明 |
+|------|----------|------|
+| Windows (CMD/PowerShell) | `.\keygen.bat` | 推荐直接在项目根目录执行 |
+| macOS/Linux | `./keygen` | 首次执行前：`chmod +x keygen` |
+| 已安装 Python 包 | `keygen` | 通过 `pyproject` 的脚本入口调用 |
+
+### 一键安装（同一条命令）
+
+> 部署参数统一维护在根目录 `runtime-config.json`（端口、登录账号、登录密码等实时可改）。
+
+```bash
+keygen install
+```
+
+按不同系统实际执行示例：
+
+```bash
+# Windows
+.\keygen.bat install
+
+# macOS/Linux
+./keygen install
+```
+
+部署脚本能力：
+- 自动识别系统并智能推荐部署模式（Docker / 本地）。
+- Linux 支持手动选择 `Docker` 或 `本地`。
+- Linux 选择 Docker 且当前无 Docker 环境时，会询问是否自动安装：
+  - 同意：自动安装 Docker + Compose 并继续部署
+  - 不同意：自动回退到本地部署
+- 本地安装会自动检查依赖环境：
+  - 若检测到项目 `.venv`，安装、预检、后续 keygen 命令会优先复用该解释器
+  - `uv` 可用时优先 `uv sync`
+  - 若 `uv` 不可用或失败，自动回退 `pip` 安装
+  - 若缺失 `pip`，自动尝试 `ensurepip` 安装后继续依赖安装
+- 部署流程中会交互采集：监听地址、端口、登录账号、登录密码、debug、日志级别。
+- 安装完成后自动执行健康检查：
+  - Docker 模式：检查 `http://127.0.0.1:<port>/login`
+  - 本地模式：检查 `webui` 与 FastAPI 应用可导入
+- 安装失败时自动回滚 `.env` / `.env.docker`；Docker 失败会打印诊断日志，本地失败会输出错误信息。
+
+### 一键升级（同一条命令）
+
+```bash
+keygen upgrade
+```
+
+按不同系统实际执行示例：
+
+```bash
+# Windows
+.\keygen.bat upgrade
+
+# macOS/Linux
+./keygen upgrade
+```
+
+升级流程：
+- 自动尝试 `git pull --ff-only`
+- Docker 模式执行镜像更新并重建容器
+- 本地模式执行依赖更新（`uv sync` 或 `pip install -r requirements.txt`）
+
+### 配置面板（同一条命令）
+
+```bash
+keygen config
+```
+
+按不同系统实际执行示例：
+
+```bash
+# Windows
+.\keygen.bat config
+
+# macOS/Linux
+./keygen config
+```
+
+可在菜单中修改：端口、登录账号、登录密码、debug、日志级别，并可一键保存/安装。
+
+> 直接输入 `keygen`（不带子命令）默认打开配置面板。
+
+### 一键打包（同一条命令）
+
+```bash
+keygen package
+```
+
+按不同系统实际执行示例：
+
+```bash
+# Windows
+.\keygen.bat package
+
+# macOS/Linux
+./keygen package
+```
+
+打包行为：
+- 自动识别当前系统并打包对应产物（Windows -> win 包；macOS -> mac 包）
+- 如需强制目标可使用：`keygen package --target windows|macos`
+- 打包前会自动检查并补齐环境依赖：
+  - 核心依赖探测失败时自动安装（`requirements.txt` / `-e .`）
+  - `PyInstaller` 缺失时自动安装
+  - `pip` 缺失时自动尝试 `ensurepip`
+
+输出到 `dist/releases/<target>/`：
+- 可执行文件（可直接运行）
+- `runtime-config.json`（统一实时修改端口/账号/密码）
+- 启动脚本（`start.bat` 或 `start.command`）
+
+> 说明：Windows 包需在 Windows 打包，macOS 包需在 macOS 打包（命令会自动校验）。
+
+### 关于“实时生效”
+
+- `runtime-config.json` 中的 **登录账号/密码** 在进程运行期间修改后会自动同步，后续登录校验可即时生效。
+- `host` / `port` 修改会被立即写入配置，但属于监听层参数，**需要重启进程后端口绑定才会真正切换**。
+- `debug` / `log_level` 会同步写入配置，建议重启进程后按新配置完全生效。
+
 ### 环境变量配置（可选）
 
 复制 `.env.example` 为 `.env`，按需填写：
@@ -97,16 +249,17 @@ cp .env.example .env
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
 | `APP_HOST` | 监听主机 | `0.0.0.0` |
-| `APP_PORT` | 监听端口 | `8000` |
+| `APP_PORT` | 监听端口 | `1455` |
+| `APP_ACCESS_USERNAME` | Web UI 访问账号 | `admin` |
 | `APP_ACCESS_PASSWORD` | Web UI 访问密钥 | `admin123` |
 | `APP_DATABASE_URL` | 数据库连接字符串 | `data/database.db` |
 
-> 优先级：命令行参数 > 环境变量（`.env`）> 数据库设置 > 默认值
+> 优先级：命令行参数 > `runtime-config.json` > `.env` > 数据库设置 > 默认值。
 
 ### 启动 Web UI
 
 ```bash
-# 默认启动（127.0.0.1:8000）
+# 默认启动（若存在 runtime-config.json，默认访问 127.0.0.1:1455）
 python webui.py
 
 # 指定地址和端口
@@ -122,10 +275,7 @@ python webui.py --access-password mypassword
 python webui.py --host 0.0.0.0 --port 8080 --access-password mypassword
 ```
 
-> `--access-password` 优先级高于数据库中保存的密钥设置，每次启动时生效。打包后的 exe 同样支持此参数：
-> ```bash
-> codex-register.exe --access-password mypassword
-> ```
+> `--access-password` 优先级高于数据库中保存的密钥设置，每次启动时生效。
 
 ### Docker 部署
 
@@ -133,49 +283,22 @@ python webui.py --host 0.0.0.0 --port 8080 --access-password mypassword
 
 #### 使用 docker-compose (推荐)
 
-先复制 Docker 环境模板并修改端口/访问密码：
+在项目根目录下启动（推荐使用 `keygen install` 生成的 `.env.docker`）：
 
 ```bash
-cp .env.docker.example .env.docker
+docker compose --env-file .env.docker up -d --build
 ```
 
-然后在项目根目录下使用：
-
-```bash
-docker compose --env-file .env.docker up -d
-```
+如需自定义端口或访问账号/密码，可在启动前通过环境变量覆盖默认值（例如 `HOST_PORT`、`WEBUI_PORT`、`WEBUI_ACCESS_USERNAME`、`WEBUI_ACCESS_PASSWORD`）。
 
 关键变量：
 
 - `HOST_PORT`：宿主机端口
 - `WEBUI_PORT`：容器内监听端口
+- `WEBUI_ACCESS_USERNAME`：Web UI 访问账号
 - `WEBUI_ACCESS_PASSWORD`：Web UI 访问密码
 
 例如 `HOST_PORT=18080`、`WEBUI_PORT=1455` 时，访问地址为 `http://127.0.0.1:18080`。
-
-#### 构建并导出 Docker 镜像文件（.tar）
-
-Linux/macOS:
-
-```bash
-bash docker-build-export.sh
-```
-
-Windows PowerShell:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\docker-build-export.ps1
-```
-
-默认会在 `dist/` 目录生成镜像文件（例如 `dist/codex-register-latest.tar`）。
-
-> 脚本会自动优先使用 `docker`，若不存在则尝试 `podman`。也可通过 `CONTAINER_CLI` 强制指定（支持可执行文件全路径）。
-
-导入镜像文件：
-
-```bash
-docker load -i dist/codex-register-latest.tar
-```
 
 #### 直接使用 docker run
 
@@ -188,13 +311,14 @@ docker run -d \
   -e WEBUI_PORT=1455 \
   -e WEBUI_ACCESS_PASSWORD=your_secure_password \
   -v $(pwd)/data:/app/data \
-  --name codex-register \
-  ghcr.io/yunxilyf/codex-register:latest
+  --name codex-keygen \
+  ghcr.io/yunxilyf/codex-keygen:latest
 ```
 
 环境变量说明：
 - `WEBUI_HOST`: 监听的主机地址 (默认 `0.0.0.0`)
 - `WEBUI_PORT`: 监听的端口 (默认 `1455`)
+- `WEBUI_ACCESS_USERNAME`: 设置 Web UI 的访问账号
 - `WEBUI_ACCESS_PASSWORD`: 设置 Web UI 的访问密码
 - `DEBUG`: 设为 `1` 或 `true` 开启调试模式
 - `LOG_LEVEL`: 日志级别，如 `info`, `debug`
@@ -214,27 +338,19 @@ python webui.py
 
 也支持 `DATABASE_URL`，优先级低于 `APP_DATABASE_URL`。
 
-启动后访问 http://127.0.0.1:8000
-
-## 打包为可执行文件
-
-```bash
-# Windows
-build.bat
-
-# Linux/macOS
-bash build.sh
-```
-
-打包后生成 `codex-register.exe`（Windows）或 `codex-register`（Unix），双击或直接运行即可，无需安装 Python 环境。
+启动后访问 http://127.0.0.1:1455
 
 ## 项目结构
 
 ```
-codex-register-v2/
+Codex-keygen/
 ├── webui.py            # Web UI 入口
-├── build.bat           # Windows 打包脚本
-├── build.sh            # Linux/macOS 打包脚本
+├── keygen / keygen.bat # 统一命令入口
+├── runtime-config.json # 统一运行参数（端口/账号/密码）
+├── scripts/            # 部署/打包管理脚本
+│   ├── keygen.py
+│   ├── deploy_manager.py
+│   └── package_manager.py
 ├── src/
 │   ├── config/         # 配置管理（Pydantic Settings）
 │   ├── core/
@@ -263,7 +379,6 @@ codex-register-v2/
 | 实时通信 | WebSocket |
 | 并发 | asyncio Semaphore + ThreadPoolExecutor |
 | 前端 | 原生 JavaScript（无框架） |
-| 打包 | PyInstaller |
 
 ## API 端点
 
@@ -319,7 +434,7 @@ codex-register-v2/
 | PATCH | `/api/email-services/{id}` | 更新服务 |
 | DELETE | `/api/email-services/{id}` | 删除服务 |
 | POST | `/api/email-services/{id}/test` | 测试服务 |
-| POST | `/api/email-services/outlook/batch-import` | 批量导入 Outlook |
+| POST | `/api/email-services/test-tempmail` | 测试全局临时邮箱配置 |
 
 ### 上传服务管理
 
@@ -349,64 +464,30 @@ codex-register-v2/
 
 | 路径 | 说明 |
 |------|------|
-|| `ws://host/api/ws/logs/{uuid}` | 实时日志流 |
+| `ws://host/api/ws/logs/{uuid}` | 实时日志流 |
 
-## Docker 部署
+## Docker 常用命令（补充）
 
-### 环境要求
-
-- Docker
-- Docker Compose
-
-### 快速部署
+> 推荐优先使用 `keygen install`。以下命令用于手动排障或手动运维。
 
 ```bash
-# 克隆项目
-git clone https://github.com/cnlimiter/codex-register.git
-cd codex-register
+# 按 keygen install 生成的 .env.docker 启动
+docker compose --env-file .env.docker up -d --build
 
-# 启动服务
-docker-compose up -d
-```
-
-服务启动后访问 http://localhost:8000
-
-### 配置说明
-
-**端口映射**：默认 `8000` 端口，可在 `docker-compose.yml` 中修改。
-
-**数据持久化**：
-```yaml
-volumes:
-  - ./data:/app/data
-  - ./logs:/app/logs
-```
-
-**环境变量配置**：
-```yaml
-environment:
-  - APP_ACCESS_PASSWORD=mypassword
-  - APP_HOST=0.0.0.0
-  - APP_PORT=8000
-```
-
-### 常用命令
-
-```bash
 # 查看日志
-docker-compose logs -f
+docker compose logs -f
 
 # 停止服务
-docker-compose down
+docker compose down
 
 # 重新构建
-docker-compose build --no-cache
+docker compose build --no-cache
 ```
 
 ## 注意事项
 
 - 首次运行会自动创建 `data/` 目录和 SQLite 数据库
-- 所有账号和设置数据存储在 `data/register.db`
+- 所有账号和设置数据存储在 `data/database.db`
 - 日志文件写入 `logs/` 目录
 - 代理优先级：动态代理 > 代理列表（随机/默认） > 直连
 - CPA / Sub2API / Team Manager 上传始终直连，不走代理；其中 CPA 可选把账号记录的代理写入 auth file 的 `proxy_url`

@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 # 获取项目根目录
 # PyInstaller 打包后静态资源在 sys._MEIPASS，开发时在源码根目录
 if getattr(sys, 'frozen', False):
-    _RESOURCE_ROOT = Path(sys._MEIPASS)
+    _RESOURCE_ROOT = Path(getattr(sys, '_MEIPASS', Path(sys.executable).parent))
 else:
     _RESOURCE_ROOT = Path(__file__).parent.parent.parent
 
@@ -53,7 +53,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title=settings.app_name,
         version=settings.app_version,
-        description="OpenAI/Codex CLI 自动注册系统 Web UI",
+        description="Codex-keygen Web UI",
         docs_url="/api/docs" if settings.debug else None,
         redoc_url="/api/redoc" if settings.debug else None,
     )
@@ -92,13 +92,18 @@ def create_app() -> FastAPI:
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     templates.env.globals["static_version"] = _build_static_asset_version(STATIC_DIR)
 
-    def _auth_token(password: str) -> str:
+    def _auth_token(username: str, password: str) -> str:
         secret = get_settings().webui_secret_key.get_secret_value().encode("utf-8")
-        return hmac.new(secret, password.encode("utf-8"), hashlib.sha256).hexdigest()
+        payload = f"{username}:{password}".encode("utf-8")
+        return hmac.new(secret, payload, hashlib.sha256).hexdigest()
 
     def _is_authenticated(request: Request) -> bool:
         cookie = request.cookies.get("webui_auth")
-        expected = _auth_token(get_settings().webui_access_password.get_secret_value())
+        settings = get_settings()
+        expected = _auth_token(
+            settings.webui_access_username,
+            settings.webui_access_password.get_secret_value(),
+        )
         return bool(cookie) and secrets.compare_digest(cookie, expected)
 
     def _redirect_to_login(request: Request) -> RedirectResponse:
@@ -109,22 +114,40 @@ def create_app() -> FastAPI:
         """登录页面"""
         return templates.TemplateResponse(
             "login.html",
-            {"request": request, "error": "", "next": next or "/"}
+            {"request": request, "error": "", "next": next or "/", "username": ""}
         )
 
     @app.post("/login")
-    async def login_submit(request: Request, password: str = Form(...), next: Optional[str] = "/"):
+    async def login_submit(
+        request: Request,
+        username: str = Form(...),
+        password: str = Form(...),
+        next: Optional[str] = "/",
+    ):
         """处理登录提交"""
-        expected = get_settings().webui_access_password.get_secret_value()
-        if not secrets.compare_digest(password, expected):
+        settings = get_settings()
+        expected_username = settings.webui_access_username
+        expected_password = settings.webui_access_password.get_secret_value()
+
+        if not secrets.compare_digest(username.strip(), expected_username) or not secrets.compare_digest(password, expected_password):
             return templates.TemplateResponse(
                 "login.html",
-                {"request": request, "error": "密码错误", "next": next or "/"},
+                {
+                    "request": request,
+                    "error": "账号或密码错误",
+                    "next": next or "/",
+                    "username": username,
+                },
                 status_code=401
             )
 
         response = RedirectResponse(url=next or "/", status_code=302)
-        response.set_cookie("webui_auth", _auth_token(expected), httponly=True, samesite="lax")
+        response.set_cookie(
+            "webui_auth",
+            _auth_token(expected_username, expected_password),
+            httponly=True,
+            samesite="lax",
+        )
         return response
 
     @app.get("/logout")
@@ -165,6 +188,8 @@ def create_app() -> FastAPI:
     @app.get("/payment", response_class=HTMLResponse)
     async def payment_page(request: Request):
         """支付页面"""
+        if not _is_authenticated(request):
+            return _redirect_to_login(request)
         return templates.TemplateResponse("payment.html", {"request": request})
 
     @app.on_event("startup")

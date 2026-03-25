@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   webui:
-    image: ${IMAGE_NAME:-codex-register}:${IMAGE_TAG:-latest}
+    image: ${IMAGE_NAME:-codex-keygen}:${IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile
@@ -11,6 +11,7 @@ services:
     environment:
       WEBUI_HOST: ${WEBUI_HOST:-0.0.0.0}
       WEBUI_PORT: ${WEBUI_PORT:-1455}
+      WEBUI_ACCESS_USERNAME: ${WEBUI_ACCESS_USERNAME:-admin}
       WEBUI_ACCESS_PASSWORD: ${WEBUI_ACCESS_PASSWORD:-admin123}
       DEBUG: ${DEBUG:-0}
       LOG_LEVEL: ${LOG_LEVEL:-info}
