@@ -22,7 +22,6 @@ class SettingCategory(str, Enum):
     REGISTRATION = "registration"
     EMAIL = "email"
     TEMPMAIL = "tempmail"
-    CUSTOM_DOMAIN = "moe_mail"
     SECURITY = "security"
     CPA = "cpa"
 
@@ -42,7 +41,7 @@ SETTING_DEFINITIONS: Dict[str, SettingDefinition] = {
     # 应用信息
     "app_name": SettingDefinition(
         db_key="app.name",
-        default_value="OpenAI/Codex CLI 自动注册系统",
+            default_value="OpenAI/Codex CLI 自动注册系统",
         category=SettingCategory.GENERAL,
         description="应用名称"
     ),
@@ -86,6 +85,12 @@ SETTING_DEFINITIONS: Dict[str, SettingDefinition] = {
         category=SettingCategory.WEBUI,
         description="Web UI 密钥",
         is_secret=True
+    ),
+    "webui_access_username": SettingDefinition(
+        db_key="webui.access_username",
+        default_value="admin",
+        category=SettingCategory.WEBUI,
+        description="Web UI 访问账号"
     ),
     "webui_access_password": SettingDefinition(
         db_key="webui.access_password",
@@ -252,7 +257,7 @@ SETTING_DEFINITIONS: Dict[str, SettingDefinition] = {
     # 邮箱服务配置
     "email_service_priority": SettingDefinition(
         db_key="email.service_priority",
-        default_value={"tempmail": 0, "outlook": 1, "moe_mail": 2},
+        default_value={"tempmail": 0},
         category=SettingCategory.EMAIL,
         description="邮箱服务优先级"
     ),
@@ -276,20 +281,11 @@ SETTING_DEFINITIONS: Dict[str, SettingDefinition] = {
         category=SettingCategory.TEMPMAIL,
         description="Tempmail 最大重试次数"
     ),
-
-    # 自定义域名邮箱配置
-    "custom_domain_base_url": SettingDefinition(
-        db_key="custom_domain.base_url",
-        default_value="",
-        category=SettingCategory.CUSTOM_DOMAIN,
-        description="自定义域名 API 地址"
-    ),
-    "custom_domain_api_key": SettingDefinition(
-        db_key="custom_domain.api_key",
-        default_value="",
-        category=SettingCategory.CUSTOM_DOMAIN,
-        description="自定义域名 API 密钥",
-        is_secret=True
+    "tempmail_enabled": SettingDefinition(
+        db_key="tempmail.enabled",
+        default_value=True,
+        category=SettingCategory.TEMPMAIL,
+        description="Tempmail 是否启用"
     ),
 
     # 安全配置
@@ -357,31 +353,6 @@ SETTING_DEFINITIONS: Dict[str, SettingDefinition] = {
         description="验证码轮询间隔（秒）"
     ),
 
-    # Outlook 配置
-    "outlook_provider_priority": SettingDefinition(
-        db_key="outlook.provider_priority",
-        default_value=["imap_old", "imap_new", "graph_api"],
-        category=SettingCategory.EMAIL,
-        description="Outlook 提供者优先级"
-    ),
-    "outlook_health_failure_threshold": SettingDefinition(
-        db_key="outlook.health_failure_threshold",
-        default_value=5,
-        category=SettingCategory.EMAIL,
-        description="Outlook 提供者连续失败次数阈值"
-    ),
-    "outlook_health_disable_duration": SettingDefinition(
-        db_key="outlook.health_disable_duration",
-        default_value=60,
-        category=SettingCategory.EMAIL,
-        description="Outlook 提供者禁用时长（秒）"
-    ),
-    "outlook_default_client_id": SettingDefinition(
-        db_key="outlook.default_client_id",
-        default_value="24d9a0ed-8787-4584-883c-2fd79308940a",
-        category=SettingCategory.EMAIL,
-        description="Outlook OAuth 默认 Client ID"
-    ),
 }
 
 # 属性名到数据库键名的映射（用于向后兼容）
@@ -403,13 +374,11 @@ SETTING_TYPES: Dict[str, Type] = {
     "email_service_priority": dict,
     "tempmail_timeout": int,
     "tempmail_max_retries": int,
+    "tempmail_enabled": bool,
     "tm_enabled": bool,
     "cpa_enabled": bool,
     "email_code_timeout": int,
     "email_code_poll_interval": int,
-    "outlook_provider_priority": list,
-    "outlook_health_failure_threshold": int,
-    "outlook_health_disable_duration": int,
 }
 
 # 需要作为 SecretStr 处理的字段
@@ -529,7 +498,7 @@ def _load_settings_from_db() -> Dict[str, Any]:
             for attr_name, defn in SETTING_DEFINITIONS.items():
                 db_setting = get_setting(db, defn.db_key)
                 if db_setting:
-                    settings_dict[attr_name] = _convert_value(attr_name, db_setting.value)
+                    settings_dict[attr_name] = _convert_value(attr_name, _value_to_string(db_setting.value))
                 else:
                     # 数据库中没有此设置，使用默认值
                     settings_dict[attr_name] = _convert_value(attr_name, _value_to_string(defn.default_value))
@@ -545,6 +514,9 @@ def _load_settings_from_db() -> Dict[str, Any]:
                     settings_dict["webui_port"] = int(env_port)
                 except ValueError:
                     pass
+            env_username = os.environ.get("APP_ACCESS_USERNAME")
+            if env_username:
+                settings_dict["webui_access_username"] = env_username
             env_password = os.environ.get("APP_ACCESS_PASSWORD")
             if env_password:
                 settings_dict["webui_access_password"] = env_password
@@ -611,6 +583,7 @@ class Settings(BaseModel):
     webui_host: str = "0.0.0.0"
     webui_port: int = 8000
     webui_secret_key: SecretStr = SecretStr("your-secret-key-change-in-production")
+    webui_access_username: str = "admin"
     webui_access_password: SecretStr = SecretStr("admin123")
 
     # 日志配置
@@ -665,16 +638,13 @@ class Settings(BaseModel):
     registration_sleep_max: int = 30
 
     # 邮箱服务配置
-    email_service_priority: Dict[str, int] = {"tempmail": 0, "outlook": 1, "moe_mail": 2}
+    email_service_priority: Dict[str, int] = {"tempmail": 0}
 
     # Tempmail.lol 配置
     tempmail_base_url: str = "https://api.tempmail.lol/v2"
     tempmail_timeout: int = 30
     tempmail_max_retries: int = 3
-
-    # 自定义域名邮箱配置
-    custom_domain_base_url: str = ""
-    custom_domain_api_key: Optional[SecretStr] = None
+    tempmail_enabled: bool = True
 
     # 安全配置
     encryption_key: SecretStr = SecretStr("your-encryption-key-change-in-production")
@@ -692,13 +662,6 @@ class Settings(BaseModel):
     # 验证码配置
     email_code_timeout: int = 120
     email_code_poll_interval: int = 3
-
-    # Outlook 配置
-    outlook_provider_priority: List[str] = ["imap_old", "imap_new", "graph_api"]
-    outlook_health_failure_threshold: int = 5
-    outlook_health_disable_duration: int = 60
-    outlook_default_client_id: str = "24d9a0ed-8787-4584-883c-2fd79308940a"
-
 
 # 全局配置实例
 _settings: Optional[Settings] = None

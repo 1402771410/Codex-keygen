@@ -4,6 +4,7 @@
 import io
 import json
 import logging
+import re
 import zipfile
 from datetime import datetime
 from typing import List, Optional
@@ -331,11 +332,94 @@ class BatchExportRequest(BaseModel):
     status_filter: Optional[str] = None
     email_service_filter: Optional[str] = None
     search_filter: Optional[str] = None
+    export_mode: Optional[str] = "single_file"  # single_file | per_account_zip
+
+
+def _normalize_export_mode(export_mode: Optional[str]) -> str:
+    """统一导出模式字段，兼容历史别名。"""
+    raw = (export_mode or "single_file").strip().lower()
+    alias_map = {
+        "single": "single_file",
+        "single_file": "single_file",
+        "all_in_one": "single_file",
+        "per_account": "per_account_zip",
+        "per_account_zip": "per_account_zip",
+        "zip": "per_account_zip",
+    }
+    normalized = alias_map.get(raw)
+    if not normalized:
+        raise HTTPException(status_code=400, detail="无效的导出模式，支持: single_file / per_account_zip")
+    return normalized
+
+
+def _safe_filename(source: str, fallback: str = "account") -> str:
+    """将任意文本转换为安全文件名。"""
+    cleaned = re.sub(r"[^0-9a-zA-Z._-]+", "_", (source or "").strip())
+    cleaned = cleaned.strip("._-")
+    return cleaned or fallback
+
+
+def _serialize_account(acc: Account) -> dict:
+    """统一账号导出字段。"""
+    return {
+        "email": acc.email,
+        "password": acc.password,
+        "client_id": acc.client_id,
+        "account_id": acc.account_id,
+        "workspace_id": acc.workspace_id,
+        "access_token": acc.access_token,
+        "refresh_token": acc.refresh_token,
+        "id_token": acc.id_token,
+        "session_token": acc.session_token,
+        "email_service": acc.email_service,
+        "registered_at": acc.registered_at.isoformat() if acc.registered_at else None,
+        "last_refresh": acc.last_refresh.isoformat() if acc.last_refresh else None,
+        "expires_at": acc.expires_at.isoformat() if acc.expires_at else None,
+        "status": acc.status,
+    }
+
+
+def _build_sub2api_account_entry(acc: Account) -> dict:
+    """构造单账号 Sub2API 格式实体。"""
+    expires_at = int(acc.expires_at.timestamp()) if acc.expires_at else 0
+    return {
+        "name": acc.email,
+        "platform": "openai",
+        "type": "oauth",
+        "credentials": {
+            "access_token": acc.access_token or "",
+            "chatgpt_account_id": acc.account_id or "",
+            "chatgpt_user_id": "",
+            "client_id": acc.client_id or "",
+            "expires_at": expires_at,
+            "expires_in": 863999,
+            "model_mapping": {
+                "gpt-5.1": "gpt-5.1",
+                "gpt-5.1-codex": "gpt-5.1-codex",
+                "gpt-5.1-codex-max": "gpt-5.1-codex-max",
+                "gpt-5.1-codex-mini": "gpt-5.1-codex-mini",
+                "gpt-5.2": "gpt-5.2",
+                "gpt-5.2-codex": "gpt-5.2-codex",
+                "gpt-5.3": "gpt-5.3",
+                "gpt-5.3-codex": "gpt-5.3-codex",
+                "gpt-5.4": "gpt-5.4"
+            },
+            "organization_id": acc.workspace_id or "",
+            "refresh_token": acc.refresh_token or ""
+        },
+        "extra": {},
+        "concurrency": 10,
+        "priority": 1,
+        "rate_multiplier": 1,
+        "auto_pause_on_expired": True
+    }
 
 
 @router.post("/export/json")
 async def export_accounts_json(request: BatchExportRequest):
     """导出账号为 JSON 格式"""
+    export_mode = _normalize_export_mode(request.export_mode)
+
     with get_db() as db:
         ids = resolve_account_ids(
             db, request.ids, request.select_all,
@@ -343,36 +427,30 @@ async def export_accounts_json(request: BatchExportRequest):
         )
         accounts = db.query(Account).filter(Account.id.in_(ids)).all()
 
-        export_data = []
-        for acc in accounts:
-            export_data.append({
-                "email": acc.email,
-                "password": acc.password,
-                "client_id": acc.client_id,
-                "account_id": acc.account_id,
-                "workspace_id": acc.workspace_id,
-                "access_token": acc.access_token,
-                "refresh_token": acc.refresh_token,
-                "id_token": acc.id_token,
-                "session_token": acc.session_token,
-                "email_service": acc.email_service,
-                "registered_at": acc.registered_at.isoformat() if acc.registered_at else None,
-                "last_refresh": acc.last_refresh.isoformat() if acc.last_refresh else None,
-                "expires_at": acc.expires_at.isoformat() if acc.expires_at else None,
-                "status": acc.status,
-            })
-
-        # 生成文件名
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"accounts_{timestamp}.json"
+        if export_mode == "single_file":
+            export_data = [_serialize_account(acc) for acc in accounts]
+            filename = f"accounts_{timestamp}.json"
+            content = json.dumps(export_data, ensure_ascii=False, indent=2)
+            return StreamingResponse(
+                iter([content]),
+                media_type="application/json",
+                headers={"Content-Disposition": f"attachment; filename={filename}"}
+            )
 
-        # 返回 JSON 响应
-        content = json.dumps(export_data, ensure_ascii=False, indent=2)
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            for acc in accounts:
+                account_data = _serialize_account(acc)
+                content = json.dumps(account_data, ensure_ascii=False, indent=2)
+                zf.writestr(f"{_safe_filename(acc.email)}.json", content)
 
+        zip_buffer.seek(0)
+        zip_filename = f"accounts_json_{timestamp}.zip"
         return StreamingResponse(
-            iter([content]),
-            media_type="application/json",
-            headers={"Content-Disposition": f"attachment; filename={filename}"}
+            zip_buffer,
+            media_type="application/zip",
+            headers={"Content-Disposition": f"attachment; filename={zip_filename}"}
         )
 
 
@@ -380,7 +458,36 @@ async def export_accounts_json(request: BatchExportRequest):
 async def export_accounts_csv(request: BatchExportRequest):
     """导出账号为 CSV 格式"""
     import csv
-    import io
+
+    export_mode = _normalize_export_mode(request.export_mode)
+
+    header = [
+        "ID", "Email", "Password", "Client ID",
+        "Account ID", "Workspace ID",
+        "Access Token", "Refresh Token", "ID Token", "Session Token",
+        "Email Service", "Status", "Registered At", "Last Refresh", "Expires At"
+    ]
+
+    def _write_single_csv(output: io.StringIO, account: Account):
+        writer = csv.writer(output)
+        writer.writerow(header)
+        writer.writerow([
+            account.id,
+            account.email,
+            account.password or "",
+            account.client_id or "",
+            account.account_id or "",
+            account.workspace_id or "",
+            account.access_token or "",
+            account.refresh_token or "",
+            account.id_token or "",
+            account.session_token or "",
+            account.email_service,
+            account.status,
+            account.registered_at.isoformat() if account.registered_at else "",
+            account.last_refresh.isoformat() if account.last_refresh else "",
+            account.expires_at.isoformat() if account.expires_at else ""
+        ])
 
     with get_db() as db:
         ids = resolve_account_ids(
@@ -389,86 +496,57 @@ async def export_accounts_csv(request: BatchExportRequest):
         )
         accounts = db.query(Account).filter(Account.id.in_(ids)).all()
 
-        # 创建 CSV 内容
-        output = io.StringIO()
-        writer = csv.writer(output)
-
-        # 写入表头
-        writer.writerow([
-            "ID", "Email", "Password", "Client ID",
-            "Account ID", "Workspace ID",
-            "Access Token", "Refresh Token", "ID Token", "Session Token",
-            "Email Service", "Status", "Registered At", "Last Refresh", "Expires At"
-        ])
-
-        # 写入数据
-        for acc in accounts:
-            writer.writerow([
-                acc.id,
-                acc.email,
-                acc.password or "",
-                acc.client_id or "",
-                acc.account_id or "",
-                acc.workspace_id or "",
-                acc.access_token or "",
-                acc.refresh_token or "",
-                acc.id_token or "",
-                acc.session_token or "",
-                acc.email_service,
-                acc.status,
-                acc.registered_at.isoformat() if acc.registered_at else "",
-                acc.last_refresh.isoformat() if acc.last_refresh else "",
-                acc.expires_at.isoformat() if acc.expires_at else ""
-            ])
-
-        # 生成文件名
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"accounts_{timestamp}.csv"
+        if export_mode == "single_file":
+            output = io.StringIO()
+            writer = csv.writer(output)
+            writer.writerow(header)
+            for acc in accounts:
+                writer.writerow([
+                    acc.id,
+                    acc.email,
+                    acc.password or "",
+                    acc.client_id or "",
+                    acc.account_id or "",
+                    acc.workspace_id or "",
+                    acc.access_token or "",
+                    acc.refresh_token or "",
+                    acc.id_token or "",
+                    acc.session_token or "",
+                    acc.email_service,
+                    acc.status,
+                    acc.registered_at.isoformat() if acc.registered_at else "",
+                    acc.last_refresh.isoformat() if acc.last_refresh else "",
+                    acc.expires_at.isoformat() if acc.expires_at else ""
+                ])
 
+            filename = f"accounts_{timestamp}.csv"
+            return StreamingResponse(
+                iter([output.getvalue()]),
+                media_type="text/csv",
+                headers={"Content-Disposition": f"attachment; filename={filename}"}
+            )
+
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            for acc in accounts:
+                output = io.StringIO()
+                _write_single_csv(output, acc)
+                zf.writestr(f"{_safe_filename(acc.email)}.csv", output.getvalue())
+
+        zip_buffer.seek(0)
+        zip_filename = f"accounts_csv_{timestamp}.zip"
         return StreamingResponse(
-            iter([output.getvalue()]),
-            media_type="text/csv",
-            headers={"Content-Disposition": f"attachment; filename={filename}"}
+            zip_buffer,
+            media_type="application/zip",
+            headers={"Content-Disposition": f"attachment; filename={zip_filename}"}
         )
 
 
 @router.post("/export/sub2api")
 async def export_accounts_sub2api(request: BatchExportRequest):
-    """导出账号为 Sub2Api 格式（所有选中账号合并到一个 JSON 的 accounts 数组中）"""
-
-    def make_account_entry(acc) -> dict:
-        expires_at = int(acc.expires_at.timestamp()) if acc.expires_at else 0
-        return {
-            "name": acc.email,
-            "platform": "openai",
-            "type": "oauth",
-            "credentials": {
-                "access_token": acc.access_token or "",
-                "chatgpt_account_id": acc.account_id or "",
-                "chatgpt_user_id": "",
-                "client_id": acc.client_id or "",
-                "expires_at": expires_at,
-                "expires_in": 863999,
-                "model_mapping": {
-                    "gpt-5.1": "gpt-5.1",
-                    "gpt-5.1-codex": "gpt-5.1-codex",
-                    "gpt-5.1-codex-max": "gpt-5.1-codex-max",
-                    "gpt-5.1-codex-mini": "gpt-5.1-codex-mini",
-                    "gpt-5.2": "gpt-5.2",
-                    "gpt-5.2-codex": "gpt-5.2-codex",
-                    "gpt-5.3": "gpt-5.3",
-                    "gpt-5.3-codex": "gpt-5.3-codex",
-                    "gpt-5.4": "gpt-5.4"
-                },
-                "organization_id": acc.workspace_id or "",
-                "refresh_token": acc.refresh_token or ""
-            },
-            "extra": {},
-            "concurrency": 10,
-            "priority": 1,
-            "rate_multiplier": 1,
-            "auto_pause_on_expired": True
-        }
+    """导出账号为 Sub2Api 格式。"""
+    export_mode = _normalize_export_mode(request.export_mode)
 
     with get_db() as db:
         ids = resolve_account_ids(
@@ -478,55 +556,71 @@ async def export_accounts_sub2api(request: BatchExportRequest):
         accounts = db.query(Account).filter(Account.id.in_(ids)).all()
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        payload = {
-            "proxies": [],
-            "accounts": [make_account_entry(acc) for acc in accounts]
-        }
-        content = json.dumps(payload, ensure_ascii=False, indent=2)
-
-        if len(accounts) == 1:
-            filename = f"{accounts[0].email}_sub2api.json"
-        else:
+        if export_mode == "single_file":
+            payload = {
+                "proxies": [],
+                "accounts": [_build_sub2api_account_entry(acc) for acc in accounts]
+            }
+            content = json.dumps(payload, ensure_ascii=False, indent=2)
             filename = f"sub2api_tokens_{timestamp}.json"
-
-        return StreamingResponse(
-            iter([content]),
-            media_type="application/json",
-            headers={"Content-Disposition": f"attachment; filename={filename}"}
-        )
-
-
-@router.post("/export/cpa")
-async def export_accounts_cpa(request: BatchExportRequest):
-    """导出账号为 CPA Token JSON 格式（每个账号单独一个 JSON 文件，打包为 ZIP）"""
-    with get_db() as db:
-        ids = resolve_account_ids(
-            db, request.ids, request.select_all,
-            request.status_filter, request.email_service_filter, request.search_filter
-        )
-        accounts = db.query(Account).filter(Account.id.in_(ids)).all()
-
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-        if len(accounts) == 1:
-            # 单个账号直接返回 JSON 文件
-            acc = accounts[0]
-            token_data = generate_token_json(acc)
-            content = json.dumps(token_data, ensure_ascii=False, indent=2)
-            filename = f"{acc.email}.json"
             return StreamingResponse(
                 iter([content]),
                 media_type="application/json",
                 headers={"Content-Disposition": f"attachment; filename={filename}"}
             )
 
-        # 多个账号打包为 ZIP
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            for acc in accounts:
+                payload = {
+                    "proxies": [],
+                    "accounts": [_build_sub2api_account_entry(acc)]
+                }
+                content = json.dumps(payload, ensure_ascii=False, indent=2)
+                zf.writestr(f"{_safe_filename(acc.email)}_sub2api.json", content)
+
+        zip_buffer.seek(0)
+        zip_filename = f"sub2api_tokens_{timestamp}.zip"
+        return StreamingResponse(
+            zip_buffer,
+            media_type="application/zip",
+            headers={"Content-Disposition": f"attachment; filename={zip_filename}"}
+        )
+
+
+@router.post("/export/cpa")
+async def export_accounts_cpa(request: BatchExportRequest):
+    """导出账号为 CPA Token JSON 格式。"""
+    export_mode = _normalize_export_mode(request.export_mode)
+
+    with get_db() as db:
+        ids = resolve_account_ids(
+            db, request.ids, request.select_all,
+            request.status_filter, request.email_service_filter, request.search_filter
+        )
+        accounts = db.query(Account).filter(Account.id.in_(ids)).all()
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        if export_mode == "single_file":
+            payload = {
+                "generated_at": datetime.utcnow().isoformat(),
+                "accounts": [generate_token_json(acc) for acc in accounts],
+            }
+            content = json.dumps(payload, ensure_ascii=False, indent=2)
+            filename = f"cpa_tokens_{timestamp}.json"
+            return StreamingResponse(
+                iter([content]),
+                media_type="application/json",
+                headers={"Content-Disposition": f"attachment; filename={filename}"}
+            )
+
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
             for acc in accounts:
                 token_data = generate_token_json(acc)
                 content = json.dumps(token_data, ensure_ascii=False, indent=2)
-                zf.writestr(f"{acc.email}.json", content)
+                zf.writestr(f"{_safe_filename(acc.email)}.json", content)
 
         zip_buffer.seek(0)
         zip_filename = f"cpa_tokens_{timestamp}.zip"
@@ -976,70 +1070,40 @@ async def upload_account_to_tm(account_id: int, request: Optional[UploadTMReques
 
 # ============== Inbox Code ==============
 
-def _build_inbox_config(db, service_type, email: str) -> dict:
-    """根据账号邮箱服务类型从数据库构建服务配置（不传 proxy_url）"""
+def _build_inbox_config(db, service_type, email_service_id: Optional[str]) -> Optional[dict]:
+    """仅为临时邮箱账号构建收件箱查询配置。"""
     from ...database.models import EmailService as EmailServiceModel
     from ...services import EmailServiceType as EST
 
-    if service_type == EST.TEMPMAIL:
-        settings = get_settings()
-        return {
-            "base_url": settings.tempmail_base_url,
-            "timeout": settings.tempmail_timeout,
-            "max_retries": settings.tempmail_max_retries,
-        }
+    if service_type != EST.TEMPMAIL:
+        return None
 
-    if service_type == EST.MOE_MAIL:
-        # 按域名后缀匹配，找不到则取 priority 最小的
-        domain = email.split("@")[1] if "@" in email else ""
-        services = db.query(EmailServiceModel).filter(
-            EmailServiceModel.service_type == "moe_mail",
-            EmailServiceModel.enabled == True
-        ).order_by(EmailServiceModel.priority.asc()).all()
-        svc = None
-        for s in services:
-            cfg = s.config or {}
-            if cfg.get("default_domain") == domain or cfg.get("domain") == domain:
-                svc = s
-                break
-        if not svc and services:
-            svc = services[0]
-        if not svc:
-            return None
-        cfg = svc.config.copy()
-        if "api_url" in cfg and "base_url" not in cfg:
-            cfg["base_url"] = cfg.pop("api_url")
-        return cfg
-
-    # 其余服务类型：直接按 service_type 查数据库
-    type_map = {
-        EST.TEMP_MAIL: "temp_mail",
-        EST.DUCK_MAIL: "duck_mail",
-        EST.FREEMAIL: "freemail",
-        EST.IMAP_MAIL: "imap_mail",
-        EST.OUTLOOK: "outlook",
+    settings = get_settings()
+    config: dict = {
+        "base_url": settings.tempmail_base_url,
+        "timeout": settings.tempmail_timeout,
+        "max_retries": settings.tempmail_max_retries,
     }
-    db_type = type_map.get(service_type)
-    if not db_type:
-        return None
 
-    query = db.query(EmailServiceModel).filter(
-        EmailServiceModel.service_type == db_type,
-        EmailServiceModel.enabled == True
-    )
-    if service_type == EST.OUTLOOK:
-        # 按 config.email 匹配账号 email
-        services = query.all()
-        svc = next((s for s in services if (s.config or {}).get("email") == email), None)
-    else:
-        svc = query.order_by(EmailServiceModel.priority.asc()).first()
+    # 优先尝试使用账号记录的临时邮箱规则配置，以保证与注册时一致。
+    if email_service_id:
+        try:
+            service_id = int(email_service_id)
+        except (TypeError, ValueError):
+            service_id = None
 
-    if not svc:
-        return None
-    cfg = svc.config.copy() if svc.config else {}
-    if "api_url" in cfg and "base_url" not in cfg:
-        cfg["base_url"] = cfg.pop("api_url")
-    return cfg
+        if service_id is not None:
+            svc = db.query(EmailServiceModel).filter(
+                EmailServiceModel.id == service_id,
+                EmailServiceModel.service_type == EST.TEMPMAIL.value,
+            ).first()
+            if svc and svc.config:
+                service_config = dict(svc.config)
+                if "api_url" in service_config and "base_url" not in service_config:
+                    service_config["base_url"] = service_config.pop("api_url")
+                config.update(service_config)
+
+    return config
 
 
 @router.post("/{account_id}/inbox-code")
@@ -1057,7 +1121,7 @@ async def get_account_inbox_code(account_id: int):
         except ValueError:
             return {"success": False, "error": "不支持的邮箱服务类型"}
 
-        config = _build_inbox_config(db, service_type, account.email)
+        config = _build_inbox_config(db, service_type, account.email_service_id)
         if config is None:
             return {"success": False, "error": "未找到可用的邮箱服务配置"}
 

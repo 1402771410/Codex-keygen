@@ -56,6 +56,7 @@ class WebUISettings(BaseModel):
     host: Optional[str] = None
     port: Optional[int] = None
     debug: Optional[bool] = None
+    access_username: Optional[str] = None
     access_password: Optional[str] = None
 
 
@@ -98,12 +99,14 @@ async def get_all_settings():
             "host": settings.webui_host,
             "port": settings.webui_port,
             "debug": settings.debug,
+            "access_username": settings.webui_access_username,
             "has_access_password": bool(settings.webui_access_password and settings.webui_access_password.get_secret_value()),
         },
         "tempmail": {
             "base_url": settings.tempmail_base_url,
             "timeout": settings.tempmail_timeout,
             "max_retries": settings.tempmail_max_retries,
+            "enabled": settings.tempmail_enabled,
         },
         "email_code": {
             "timeout": settings.email_code_timeout,
@@ -235,6 +238,11 @@ async def update_webui_settings(request: WebUISettings):
         update_dict["webui_port"] = request.port
     if request.debug is not None:
         update_dict["debug"] = request.debug
+    if request.access_username is not None:
+        username = request.access_username.strip()
+        if not username:
+            raise HTTPException(status_code=400, detail="访问账号不能为空")
+        update_dict["webui_access_username"] = username
     if request.access_password:
         update_dict["webui_access_password"] = request.access_password
 
@@ -378,7 +386,8 @@ async def get_recent_logs(
 
 class TempmailSettings(BaseModel):
     """临时邮箱设置"""
-    api_url: Optional[str] = None
+    base_url: Optional[str] = None
+    api_url: Optional[str] = None  # 兼容历史字段
     enabled: bool = True
 
 
@@ -394,10 +403,10 @@ async def get_tempmail_settings():
     settings = get_settings()
 
     return {
-        "api_url": settings.tempmail_base_url,
+        "base_url": settings.tempmail_base_url,
         "timeout": settings.tempmail_timeout,
         "max_retries": settings.tempmail_max_retries,
-        "enabled": True  # 临时邮箱默认可用
+        "enabled": settings.tempmail_enabled,
     }
 
 
@@ -406,8 +415,12 @@ async def update_tempmail_settings(request: TempmailSettings):
     """更新临时邮箱设置"""
     update_dict = {}
 
-    if request.api_url:
-        update_dict["tempmail_base_url"] = request.api_url
+    base_url = request.base_url or request.api_url
+    if base_url:
+        update_dict["tempmail_base_url"] = base_url
+
+    if request.enabled is not None:
+        update_dict["tempmail_enabled"] = request.enabled
 
     update_settings(**update_dict)
 
@@ -689,40 +702,6 @@ async def disable_proxy(proxy_id: int):
         if not proxy:
             raise HTTPException(status_code=404, detail="代理不存在")
         return {"success": True, "message": "代理已禁用"}
-
-
-# ============== Outlook 设置 ==============
-
-class OutlookSettings(BaseModel):
-    """Outlook 设置"""
-    default_client_id: Optional[str] = None
-
-
-@router.get("/outlook")
-async def get_outlook_settings():
-    """获取 Outlook 设置"""
-    settings = get_settings()
-
-    return {
-        "default_client_id": settings.outlook_default_client_id,
-        "provider_priority": settings.outlook_provider_priority,
-        "health_failure_threshold": settings.outlook_health_failure_threshold,
-        "health_disable_duration": settings.outlook_health_disable_duration,
-    }
-
-
-@router.post("/outlook")
-async def update_outlook_settings(request: OutlookSettings):
-    """更新 Outlook 设置"""
-    update_dict = {}
-
-    if request.default_client_id is not None:
-        update_dict["outlook_default_client_id"] = request.default_client_id
-
-    if update_dict:
-        update_settings(**update_dict)
-
-    return {"success": True, "message": "Outlook 设置已更新"}
 
 
 # ============== Team Manager 设置 ==============

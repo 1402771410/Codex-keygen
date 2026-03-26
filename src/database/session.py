@@ -118,14 +118,6 @@ class DatabaseSessionManager:
         Base.metadata.create_all(bind=self.engine)
 
         with self.engine.connect() as conn:
-            # 数据迁移：将旧的 custom_domain 记录统一为 moe_mail
-            try:
-                conn.execute(text("UPDATE email_services SET service_type='moe_mail' WHERE service_type='custom_domain'"))
-                conn.execute(text("UPDATE accounts SET email_service='moe_mail' WHERE email_service='custom_domain'"))
-                conn.commit()
-            except Exception as e:
-                logger.warning(f"迁移 custom_domain -> moe_mail 时出错: {e}")
-
             for table_name, column_name, column_type in migrations:
                 try:
                     # 检查列是否存在

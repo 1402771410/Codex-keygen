@@ -42,7 +42,7 @@ class Account(Base):
     client_id = Column(String(255))  # OAuth Client ID
     account_id = Column(String(255))
     workspace_id = Column(String(255))
-    email_service = Column(String(50), nullable=False)  # 'tempmail', 'outlook', 'moe_mail'
+    email_service = Column(String(50), nullable=False)  # 'tempmail'
     email_service_id = Column(String(255))  # 邮箱服务中的ID
     proxy_used = Column(String(255))
     registered_at = Column(DateTime, default=datetime.utcnow)
@@ -89,7 +89,7 @@ class EmailService(Base):
     __tablename__ = 'email_services'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    service_type = Column(String(50), nullable=False)  # 'outlook', 'moe_mail'
+    service_type = Column(String(50), nullable=False)  # 'tempmail'
     name = Column(String(100), nullable=False)
     config = Column(JSONEncodedDict, nullable=False)  # 服务配置（加密存储）
     enabled = Column(Boolean, default=True)

@@ -7,7 +7,7 @@ import logging
 import uuid
 import random
 from datetime import datetime, timedelta
-from typing import List, Optional, Dict, Tuple, Any, Coroutine, Set
+from typing import List, Optional, Dict, Tuple, Any, Coroutine, Set, cast
 
 from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
 from pydantic import BaseModel, Field
@@ -167,52 +167,6 @@ class TaskListResponse(BaseModel):
     tasks: List[RegistrationTaskResponse]
 
 
-# ============== Outlook 批量注册模型 ==============
-
-class OutlookAccountForRegistration(BaseModel):
-    """可用于注册的 Outlook 账户"""
-    id: int                      # EmailService 表的 ID
-    email: str
-    name: str
-    has_oauth: bool              # 是否有 OAuth 配置
-    is_registered: bool          # 是否已注册
-    registered_account_id: Optional[int] = None
-
-
-class OutlookAccountsListResponse(BaseModel):
-    """Outlook 账户列表响应"""
-    total: int
-    registered_count: int        # 已注册数量
-    unregistered_count: int      # 未注册数量
-    accounts: List[OutlookAccountForRegistration]
-
-
-class OutlookBatchRegistrationRequest(BaseModel):
-    """Outlook 批量注册请求"""
-    service_ids: List[int]
-    skip_registered: bool = True
-    proxy: Optional[str] = None
-    interval_min: int = 5
-    interval_max: int = 30
-    concurrency: int = 1
-    mode: str = "pipeline"
-    auto_upload_cpa: bool = False
-    cpa_service_ids: List[int] = []
-    auto_upload_sub2api: bool = False
-    sub2api_service_ids: List[int] = []
-    auto_upload_tm: bool = False
-    tm_service_ids: List[int] = []
-
-
-class OutlookBatchRegistrationResponse(BaseModel):
-    """Outlook 批量注册响应"""
-    batch_id: str
-    total: int                   # 总数
-    skipped: int                 # 跳过数（已注册）
-    to_register: int             # 待注册数
-    service_ids: List[int]       # 实际要注册的服务 ID
-
-
 # ============== Helper Functions ==============
 
 def task_to_response(task: RegistrationTask, settings: Optional[dict] = None) -> RegistrationTaskResponse:
@@ -238,21 +192,11 @@ def _normalize_email_service_config(
     config: Optional[dict],
     proxy_url: Optional[str] = None
 ) -> dict:
-    """按服务类型兼容旧字段名，避免不同服务的配置键互相污染。"""
-    normalized = config.copy() if config else {}
+    """标准化临时邮箱配置。"""
+    normalized = dict(config or {})
 
     if 'api_url' in normalized and 'base_url' not in normalized:
         normalized['base_url'] = normalized.pop('api_url')
-
-    if service_type == EmailServiceType.MOE_MAIL:
-        if 'domain' in normalized and 'default_domain' not in normalized:
-            normalized['default_domain'] = normalized.pop('domain')
-    elif service_type in (EmailServiceType.TEMP_MAIL, EmailServiceType.FREEMAIL):
-        if 'default_domain' in normalized and 'domain' not in normalized:
-            normalized['domain'] = normalized.pop('default_domain')
-    elif service_type == EmailServiceType.DUCK_MAIL:
-        if 'domain' in normalized and 'default_domain' not in normalized:
-            normalized['default_domain'] = normalized.pop('domain')
 
     if proxy_url and 'proxy_url' not in normalized:
         normalized['proxy_url'] = proxy_url
@@ -366,132 +310,54 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
             # 更新任务的代理记录
             crud.update_registration_task(db, task_uuid, proxy=actual_proxy_url)
 
-            # 创建邮箱服务
+            # 创建邮箱服务（仅保留临时邮箱）
             service_type = EmailServiceType(email_service_type)
-            settings = get_settings()
+            if service_type != EmailServiceType.TEMPMAIL:
+                raise ValueError("当前仅支持临时邮箱注册")
 
-            # 优先使用数据库中配置的邮箱服务
+            settings = get_settings()
+            from ...database.models import EmailService as EmailServiceModel
+
+            selected_service = None
             if email_service_id:
-                from ...database.models import EmailService as EmailServiceModel
-                db_service = db.query(EmailServiceModel).filter(
+                selected_service = db.query(EmailServiceModel).filter(
                     EmailServiceModel.id == email_service_id,
-                    EmailServiceModel.enabled == True
+                    EmailServiceModel.service_type == EmailServiceType.TEMPMAIL.value,
+                    EmailServiceModel.enabled == True,
+                ).first()
+                if not selected_service:
+                    raise ValueError(f"临时邮箱服务不存在或已禁用: {email_service_id}")
+            else:
+                # 轮询策略：优先选择“最久未使用”的临时邮箱规则。
+                # priority 用于首次无 last_used 时的排序兜底，确保可控顺序。
+                selected_service = db.query(EmailServiceModel).filter(
+                    EmailServiceModel.service_type == EmailServiceType.TEMPMAIL.value,
+                    EmailServiceModel.enabled == True,
+                ).order_by(
+                    EmailServiceModel.last_used.is_(None).desc(),
+                    EmailServiceModel.last_used.asc(),
+                    EmailServiceModel.priority.asc(),
+                    EmailServiceModel.id.asc(),
                 ).first()
 
-                if db_service:
-                    service_type = EmailServiceType(db_service.service_type)
-                    config = _normalize_email_service_config(service_type, db_service.config, actual_proxy_url)
-                    # 更新任务关联的邮箱服务
-                    crud.update_registration_task(db, task_uuid, email_service_id=db_service.id)
-                    logger.info(f"使用数据库邮箱服务: {db_service.name} (ID: {db_service.id}, 类型: {service_type.value})")
-                else:
-                    raise ValueError(f"邮箱服务不存在或已禁用: {email_service_id}")
+            config = {
+                "base_url": settings.tempmail_base_url,
+                "timeout": settings.tempmail_timeout,
+                "max_retries": settings.tempmail_max_retries,
+                "proxy_url": actual_proxy_url,
+            }
+
+            if selected_service:
+                service_type = EmailServiceType.TEMPMAIL
+                config.update(_normalize_email_service_config(service_type, cast(dict, selected_service.config), actual_proxy_url))
+                selected_service.last_used = datetime.utcnow()
+                db.commit()
+                crud.update_registration_task(db, task_uuid, email_service_id=selected_service.id)
+                logger.info(
+                    f"使用临时邮箱池服务: {selected_service.name} (ID: {selected_service.id}, priority: {selected_service.priority})"
+                )
             else:
-                # 使用默认配置或传入的配置
-                if service_type == EmailServiceType.TEMPMAIL:
-                    config = {
-                        "base_url": settings.tempmail_base_url,
-                        "timeout": settings.tempmail_timeout,
-                        "max_retries": settings.tempmail_max_retries,
-                        "proxy_url": actual_proxy_url,
-                    }
-                elif service_type == EmailServiceType.MOE_MAIL:
-                    # 检查数据库中是否有可用的自定义域名服务
-                    from ...database.models import EmailService as EmailServiceModel
-                    db_service = db.query(EmailServiceModel).filter(
-                        EmailServiceModel.service_type == "moe_mail",
-                        EmailServiceModel.enabled == True
-                    ).order_by(EmailServiceModel.priority.asc()).first()
-
-                    if db_service and db_service.config:
-                        config = _normalize_email_service_config(service_type, db_service.config, actual_proxy_url)
-                        crud.update_registration_task(db, task_uuid, email_service_id=db_service.id)
-                        logger.info(f"使用数据库自定义域名服务: {db_service.name}")
-                    elif settings.custom_domain_base_url and settings.custom_domain_api_key:
-                        config = {
-                            "base_url": settings.custom_domain_base_url,
-                            "api_key": settings.custom_domain_api_key.get_secret_value() if settings.custom_domain_api_key else "",
-                            "proxy_url": actual_proxy_url,
-                        }
-                    else:
-                        raise ValueError("没有可用的自定义域名邮箱服务，请先在设置中配置")
-                elif service_type == EmailServiceType.OUTLOOK:
-                    # 检查数据库中是否有可用的 Outlook 账户
-                    from ...database.models import EmailService as EmailServiceModel, Account
-                    # 获取所有启用的 Outlook 服务
-                    outlook_services = db.query(EmailServiceModel).filter(
-                        EmailServiceModel.service_type == "outlook",
-                        EmailServiceModel.enabled == True
-                    ).order_by(EmailServiceModel.priority.asc()).all()
-
-                    if not outlook_services:
-                        raise ValueError("没有可用的 Outlook 账户，请先在设置中导入账户")
-
-                    # 找到一个未注册的 Outlook 账户
-                    selected_service = None
-                    for svc in outlook_services:
-                        email = svc.config.get("email") if svc.config else None
-                        if not email:
-                            continue
-                        # 检查是否已在 accounts 表中注册
-                        existing = db.query(Account).filter(Account.email == email).first()
-                        if not existing:
-                            selected_service = svc
-                            logger.info(f"选择未注册的 Outlook 账户: {email}")
-                            break
-                        else:
-                            logger.info(f"跳过已注册的 Outlook 账户: {email}")
-
-                    if selected_service and selected_service.config:
-                        config = selected_service.config.copy()
-                        crud.update_registration_task(db, task_uuid, email_service_id=selected_service.id)
-                        logger.info(f"使用数据库 Outlook 账户: {selected_service.name}")
-                    else:
-                        raise ValueError("所有 Outlook 账户都已注册过 OpenAI 账号，请添加新的 Outlook 账户")
-                elif service_type == EmailServiceType.DUCK_MAIL:
-                    from ...database.models import EmailService as EmailServiceModel
-
-                    db_service = db.query(EmailServiceModel).filter(
-                        EmailServiceModel.service_type == "duck_mail",
-                        EmailServiceModel.enabled == True
-                    ).order_by(EmailServiceModel.priority.asc()).first()
-
-                    if db_service and db_service.config:
-                        config = _normalize_email_service_config(service_type, db_service.config, actual_proxy_url)
-                        crud.update_registration_task(db, task_uuid, email_service_id=db_service.id)
-                        logger.info(f"使用数据库 DuckMail 服务: {db_service.name}")
-                    else:
-                        raise ValueError("没有可用的 DuckMail 邮箱服务，请先在邮箱服务页面添加服务")
-                elif service_type == EmailServiceType.FREEMAIL:
-                    from ...database.models import EmailService as EmailServiceModel
-
-                    db_service = db.query(EmailServiceModel).filter(
-                        EmailServiceModel.service_type == "freemail",
-                        EmailServiceModel.enabled == True
-                    ).order_by(EmailServiceModel.priority.asc()).first()
-
-                    if db_service and db_service.config:
-                        config = _normalize_email_service_config(service_type, db_service.config, actual_proxy_url)
-                        crud.update_registration_task(db, task_uuid, email_service_id=db_service.id)
-                        logger.info(f"使用数据库 Freemail 服务: {db_service.name}")
-                    else:
-                        raise ValueError("没有可用的 Freemail 邮箱服务，请先在邮箱服务页面添加服务")
-                elif service_type == EmailServiceType.IMAP_MAIL:
-                    from ...database.models import EmailService as EmailServiceModel
-
-                    db_service = db.query(EmailServiceModel).filter(
-                        EmailServiceModel.service_type == "imap_mail",
-                        EmailServiceModel.enabled == True
-                    ).order_by(EmailServiceModel.priority.asc()).first()
-
-                    if db_service and db_service.config:
-                        config = _normalize_email_service_config(service_type, db_service.config, actual_proxy_url)
-                        crud.update_registration_task(db, task_uuid, email_service_id=db_service.id)
-                        logger.info(f"使用数据库 IMAP 邮箱服务: {db_service.name}")
-                    else:
-                        raise ValueError("没有可用的 IMAP 邮箱服务，请先在邮箱服务中添加")
-                else:
-                    config = email_service_config or {}
+                logger.info("未配置临时邮箱池服务，回退到全局 tempmail 配置")
 
             email_service = EmailServiceFactory.create(service_type, config)
 
@@ -1001,26 +867,6 @@ def _build_batch_settings_snapshot(
         "mode": request.mode,
         "window_start": normalized_window_start if normalized_window_start is not None else request.window_start,
         "window_end": normalized_window_end if normalized_window_end is not None else request.window_end,
-        "auto_upload_cpa": request.auto_upload_cpa,
-        "cpa_service_ids": request.cpa_service_ids,
-        "auto_upload_sub2api": request.auto_upload_sub2api,
-        "sub2api_service_ids": request.sub2api_service_ids,
-        "auto_upload_tm": request.auto_upload_tm,
-        "tm_service_ids": request.tm_service_ids,
-    }
-
-
-def _build_outlook_batch_settings_snapshot(request: OutlookBatchRegistrationRequest) -> Dict[str, Any]:
-    """构建 Outlook 批量任务设置快照。"""
-    return {
-        "registration_mode": "outlook_batch",
-        "service_ids": request.service_ids,
-        "skip_registered": request.skip_registered,
-        "proxy": request.proxy,
-        "interval_min": request.interval_min,
-        "interval_max": request.interval_max,
-        "concurrency": request.concurrency,
-        "mode": request.mode,
         "auto_upload_cpa": request.auto_upload_cpa,
         "cpa_service_ids": request.cpa_service_ids,
         "auto_upload_sub2api": request.auto_upload_sub2api,
@@ -1541,9 +1387,9 @@ async def start_registration(
     """
     启动注册任务
 
-    - email_service_type: 邮箱服务类型 (tempmail, outlook, moe_mail)
+    - email_service_type: 邮箱服务类型（仅支持 tempmail）
     - proxy: 代理地址
-    - email_service_config: 邮箱服务配置（outlook 需要提供账户信息）
+    - email_service_config: 邮箱服务配置
     """
     # 验证邮箱服务类型
     try:
@@ -1990,482 +1836,44 @@ async def get_registration_stats():
 @router.get("/available-services")
 async def get_available_email_services():
     """
-    获取可用于注册的邮箱服务列表
-
-    返回所有已启用的邮箱服务，包括：
-    - tempmail: 临时邮箱（无需配置）
-    - outlook: 已导入的 Outlook 账户
-    - moe_mail: 已配置的自定义域名服务
+    获取可用于注册的邮箱服务列表（仅临时邮箱）
     """
     from ...database.models import EmailService as EmailServiceModel
-    from ...config.settings import get_settings
-
     settings = get_settings()
-    result = {
-        "tempmail": {
-            "available": True,
-            "count": 1,
-            "services": [{
-                "id": None,
-                "name": "Tempmail.lol",
+    services = []
+
+    with get_db() as db:
+        db_services = db.query(EmailServiceModel).filter(
+            EmailServiceModel.service_type == "tempmail",
+            EmailServiceModel.enabled == True,
+        ).order_by(
+            EmailServiceModel.priority.asc(),
+            EmailServiceModel.id.asc(),
+        ).all()
+
+        for service in db_services:
+            config = service.config or {}
+            services.append({
+                "id": service.id,
+                "name": service.name,
                 "type": "tempmail",
-                "description": "临时邮箱，自动创建"
-            }]
-        },
-        "outlook": {
-            "available": False,
-            "count": 0,
-            "services": []
-        },
-        "moe_mail": {
-            "available": False,
-            "count": 0,
-            "services": []
-        },
-        "temp_mail": {
-            "available": False,
-            "count": 0,
-            "services": []
-        },
-        "duck_mail": {
-            "available": False,
-            "count": 0,
-            "services": []
-        },
-        "freemail": {
-            "available": False,
-            "count": 0,
-            "services": []
-        },
-        "imap_mail": {
-            "available": False,
-            "count": 0,
-            "services": []
+                "priority": service.priority,
+                "description": f"规则邮箱（前缀: {config.get('address_prefix') or '-'}）",
+            })
+
+    if not services:
+        services.append({
+            "id": None,
+            "name": "Tempmail.lol 默认",
+            "type": "tempmail",
+            "priority": 0,
+            "description": f"API: {settings.tempmail_base_url}",
+        })
+
+    return {
+        "tempmail": {
+            "available": bool(settings.tempmail_enabled),
+            "count": len(services),
+            "services": services,
         }
     }
-
-    with get_db() as db:
-        # 获取 Outlook 账户
-        outlook_services = db.query(EmailServiceModel).filter(
-            EmailServiceModel.service_type == "outlook",
-            EmailServiceModel.enabled == True
-        ).order_by(EmailServiceModel.priority.asc()).all()
-
-        for service in outlook_services:
-            config = service.config or {}
-            result["outlook"]["services"].append({
-                "id": service.id,
-                "name": service.name,
-                "type": "outlook",
-                "has_oauth": bool(config.get("client_id") and config.get("refresh_token")),
-                "priority": service.priority
-            })
-
-        result["outlook"]["count"] = len(outlook_services)
-        result["outlook"]["available"] = len(outlook_services) > 0
-
-        # 获取自定义域名服务
-        custom_services = db.query(EmailServiceModel).filter(
-            EmailServiceModel.service_type == "moe_mail",
-            EmailServiceModel.enabled == True
-        ).order_by(EmailServiceModel.priority.asc()).all()
-
-        for service in custom_services:
-            config = service.config or {}
-            result["moe_mail"]["services"].append({
-                "id": service.id,
-                "name": service.name,
-                "type": "moe_mail",
-                "default_domain": config.get("default_domain"),
-                "priority": service.priority
-            })
-
-        result["moe_mail"]["count"] = len(custom_services)
-        result["moe_mail"]["available"] = len(custom_services) > 0
-
-        # 如果数据库中没有自定义域名服务，检查 settings
-        if not result["moe_mail"]["available"]:
-            if settings.custom_domain_base_url and settings.custom_domain_api_key:
-                result["moe_mail"]["available"] = True
-                result["moe_mail"]["count"] = 1
-                result["moe_mail"]["services"].append({
-                    "id": None,
-                    "name": "默认自定义域名服务",
-                    "type": "moe_mail",
-                    "from_settings": True
-                })
-
-        # 获取 TempMail 服务（自部署 Cloudflare Worker 临时邮箱）
-        temp_mail_services = db.query(EmailServiceModel).filter(
-            EmailServiceModel.service_type == "temp_mail",
-            EmailServiceModel.enabled == True
-        ).order_by(EmailServiceModel.priority.asc()).all()
-
-        for service in temp_mail_services:
-            config = service.config or {}
-            result["temp_mail"]["services"].append({
-                "id": service.id,
-                "name": service.name,
-                "type": "temp_mail",
-                "domain": config.get("domain"),
-                "priority": service.priority
-            })
-
-        result["temp_mail"]["count"] = len(temp_mail_services)
-        result["temp_mail"]["available"] = len(temp_mail_services) > 0
-
-        duck_mail_services = db.query(EmailServiceModel).filter(
-            EmailServiceModel.service_type == "duck_mail",
-            EmailServiceModel.enabled == True
-        ).order_by(EmailServiceModel.priority.asc()).all()
-
-        for service in duck_mail_services:
-            config = service.config or {}
-            result["duck_mail"]["services"].append({
-                "id": service.id,
-                "name": service.name,
-                "type": "duck_mail",
-                "default_domain": config.get("default_domain"),
-                "priority": service.priority
-            })
-
-        result["duck_mail"]["count"] = len(duck_mail_services)
-        result["duck_mail"]["available"] = len(duck_mail_services) > 0
-
-        freemail_services = db.query(EmailServiceModel).filter(
-            EmailServiceModel.service_type == "freemail",
-            EmailServiceModel.enabled == True
-        ).order_by(EmailServiceModel.priority.asc()).all()
-
-        for service in freemail_services:
-            config = service.config or {}
-            result["freemail"]["services"].append({
-                "id": service.id,
-                "name": service.name,
-                "type": "freemail",
-                "domain": config.get("domain"),
-                "priority": service.priority
-            })
-
-        result["freemail"]["count"] = len(freemail_services)
-        result["freemail"]["available"] = len(freemail_services) > 0
-
-        imap_mail_services = db.query(EmailServiceModel).filter(
-            EmailServiceModel.service_type == "imap_mail",
-            EmailServiceModel.enabled == True
-        ).order_by(EmailServiceModel.priority.asc()).all()
-
-        for service in imap_mail_services:
-            config = service.config or {}
-            result["imap_mail"]["services"].append({
-                "id": service.id,
-                "name": service.name,
-                "type": "imap_mail",
-                "email": config.get("email"),
-                "host": config.get("host"),
-                "priority": service.priority
-            })
-
-        result["imap_mail"]["count"] = len(imap_mail_services)
-        result["imap_mail"]["available"] = len(imap_mail_services) > 0
-
-    return result
-
-
-# ============== Outlook 批量注册 API ==============
-
-@router.get("/outlook-accounts", response_model=OutlookAccountsListResponse)
-async def get_outlook_accounts_for_registration():
-    """
-    获取可用于注册的 Outlook 账户列表
-
-    返回所有已启用的 Outlook 服务，并检查每个邮箱是否已在 accounts 表中注册
-    """
-    from ...database.models import EmailService as EmailServiceModel
-    from ...database.models import Account
-
-    with get_db() as db:
-        # 获取所有启用的 Outlook 服务
-        outlook_services = db.query(EmailServiceModel).filter(
-            EmailServiceModel.service_type == "outlook",
-            EmailServiceModel.enabled == True
-        ).order_by(EmailServiceModel.priority.asc()).all()
-
-        accounts = []
-        registered_count = 0
-        unregistered_count = 0
-
-        for service in outlook_services:
-            config = service.config or {}
-            email = config.get("email") or service.name
-
-            # 检查是否已注册（查询 accounts 表）
-            existing_account = db.query(Account).filter(
-                Account.email == email
-            ).first()
-
-            is_registered = existing_account is not None
-            if is_registered:
-                registered_count += 1
-            else:
-                unregistered_count += 1
-
-            accounts.append(OutlookAccountForRegistration(
-                id=service.id,
-                email=email,
-                name=service.name,
-                has_oauth=bool(config.get("client_id") and config.get("refresh_token")),
-                is_registered=is_registered,
-                registered_account_id=existing_account.id if existing_account else None
-            ))
-
-        return OutlookAccountsListResponse(
-            total=len(accounts),
-            registered_count=registered_count,
-            unregistered_count=unregistered_count,
-            accounts=accounts
-        )
-
-
-async def run_outlook_batch_registration(
-    batch_id: str,
-    service_ids: List[int],
-    skip_registered: bool,
-    proxy: Optional[str],
-    interval_min: int,
-    interval_max: int,
-    concurrency: int = 1,
-    mode: str = "pipeline",
-    auto_upload_cpa: bool = False,
-    cpa_service_ids: Optional[List[int]] = None,
-    auto_upload_sub2api: bool = False,
-    sub2api_service_ids: Optional[List[int]] = None,
-    auto_upload_tm: bool = False,
-    tm_service_ids: Optional[List[int]] = None,
-):
-    """
-    异步执行 Outlook 批量注册任务，复用通用并发逻辑
-
-    将每个 service_id 映射为一个独立的 task_uuid，然后调用
-    run_batch_registration 的并发逻辑
-    """
-    loop = task_manager.get_loop()
-    if loop is None:
-        loop = asyncio.get_event_loop()
-        task_manager.set_loop(loop)
-
-    # 预先为每个 service_id 创建注册任务记录
-    task_uuids = []
-    with get_db() as db:
-        for service_id in service_ids:
-            task_uuid = str(uuid.uuid4())
-            crud.create_registration_task(
-                db,
-                task_uuid=task_uuid,
-                proxy=proxy,
-                email_service_id=service_id
-            )
-            task_uuids.append(task_uuid)
-
-    # 复用通用并发逻辑（outlook 服务类型，每个任务通过 email_service_id 定位账户）
-    await run_batch_registration(
-        batch_id=batch_id,
-        task_uuids=task_uuids,
-        email_service_type="outlook",
-        proxy=proxy,
-        email_service_config=None,
-        email_service_id=None,   # 每个任务已绑定了独立的 email_service_id
-        interval_min=interval_min,
-        interval_max=interval_max,
-        concurrency=concurrency,
-        mode=mode,
-        auto_upload_cpa=auto_upload_cpa,
-        cpa_service_ids=cpa_service_ids,
-        auto_upload_sub2api=auto_upload_sub2api,
-        sub2api_service_ids=sub2api_service_ids,
-        auto_upload_tm=auto_upload_tm,
-        tm_service_ids=tm_service_ids,
-        registration_mode="fixed",
-        target_success_count=None,
-    )
-
-
-@router.post("/outlook-batch", response_model=OutlookBatchRegistrationResponse)
-async def start_outlook_batch_registration(
-    request: OutlookBatchRegistrationRequest,
-    background_tasks: BackgroundTasks
-):
-    """
-    启动 Outlook 批量注册任务
-
-    - service_ids: 选中的 EmailService ID 列表
-    - skip_registered: 是否自动跳过已注册邮箱（默认 True）
-    - proxy: 代理地址
-    - interval_min: 最小间隔秒数
-    - interval_max: 最大间隔秒数
-    """
-    from ...database.models import EmailService as EmailServiceModel
-    from ...database.models import Account
-
-    # 验证参数
-    if not request.service_ids:
-        raise HTTPException(status_code=400, detail="请选择至少一个 Outlook 账户")
-
-    if request.interval_min < 0 or request.interval_max < request.interval_min:
-        raise HTTPException(status_code=400, detail="间隔时间参数无效")
-
-    if not 1 <= request.concurrency <= 50:
-        raise HTTPException(status_code=400, detail="并发数必须在 1-50 之间")
-
-    if request.mode not in ("parallel", "pipeline"):
-        raise HTTPException(status_code=400, detail="模式必须为 parallel 或 pipeline")
-
-    # 过滤掉已注册的邮箱
-    actual_service_ids = request.service_ids
-    skipped_count = 0
-    settings_snapshot = _build_outlook_batch_settings_snapshot(request)
-
-    if request.skip_registered:
-        actual_service_ids = []
-        with get_db() as db:
-            for service_id in request.service_ids:
-                service = db.query(EmailServiceModel).filter(
-                    EmailServiceModel.id == service_id
-                ).first()
-
-                if not service:
-                    continue
-
-                config = service.config or {}
-                email = config.get("email") or service.name
-
-                # 检查是否已注册
-                existing_account = db.query(Account).filter(
-                    Account.email == email
-                ).first()
-
-                if existing_account:
-                    skipped_count += 1
-                else:
-                    actual_service_ids.append(service_id)
-
-    # 快照中记录“实际执行集合”，避免前端重连时恢复成过滤前的配置。
-    settings_snapshot["service_ids"] = list(actual_service_ids)
-    settings_snapshot["source_service_ids"] = list(request.service_ids)
-    settings_snapshot["skipped"] = skipped_count
-    settings_snapshot["to_register"] = len(actual_service_ids)
-
-    if not actual_service_ids:
-        return OutlookBatchRegistrationResponse(
-            batch_id="",
-            total=len(request.service_ids),
-            skipped=skipped_count,
-            to_register=0,
-            service_ids=[]
-        )
-
-    # 创建批量任务
-    batch_id = str(uuid.uuid4())
-    now_iso = datetime.utcnow().isoformat()
-
-    # 初始化批量任务状态
-    batch_tasks[batch_id] = {
-        "total": len(actual_service_ids),
-        "completed": 0,
-        "success": 0,
-        "failed": 0,
-        "skipped": 0,
-        "cancelled": False,
-        "service_ids": actual_service_ids,
-        "registration_mode": "outlook_batch",
-        "target_success": len(actual_service_ids),
-        "attempts": 0,
-        "config_snapshot": settings_snapshot,
-        "current_index": 0,
-        "logs": [],
-        "finished": False,
-        "created_at": now_iso,
-        "updated_at": now_iso,
-    }
-    task_manager.init_batch(batch_id, len(actual_service_ids))
-    task_manager.update_batch_status(
-        batch_id,
-        registration_mode="outlook_batch",
-        target_success=len(actual_service_ids),
-        attempts=0,
-        config_snapshot=settings_snapshot,
-    )
-
-    # 在后台运行批量注册（与请求连接解耦）
-    _spawn_detached_coroutine(
-        run_outlook_batch_registration(
-            batch_id,
-            actual_service_ids,
-            request.skip_registered,
-            request.proxy,
-            request.interval_min,
-            request.interval_max,
-            request.concurrency,
-            request.mode,
-            request.auto_upload_cpa,
-            request.cpa_service_ids,
-            request.auto_upload_sub2api,
-            request.sub2api_service_ids,
-            request.auto_upload_tm,
-            request.tm_service_ids,
-        )
-    )
-
-    return OutlookBatchRegistrationResponse(
-        batch_id=batch_id,
-        total=len(request.service_ids),
-        skipped=skipped_count,
-        to_register=len(actual_service_ids),
-        service_ids=actual_service_ids
-    )
-
-
-@router.get("/outlook-batch/{batch_id}")
-async def get_outlook_batch_status(batch_id: str):
-    """获取 Outlook 批量任务状态"""
-    if batch_id not in batch_tasks:
-        raise HTTPException(status_code=404, detail="批量任务不存在")
-
-    batch = batch_tasks[batch_id]
-    return {
-        "batch_id": batch_id,
-        "total": batch["total"],
-        "target_success": batch.get("target_success", batch["total"]),
-        "attempts": batch.get("attempts", 0),
-        "completed": batch["completed"],
-        "success": batch["success"],
-        "failed": batch["failed"],
-        "skipped": batch.get("skipped", 0),
-        "current_index": batch["current_index"],
-        "cancelled": batch["cancelled"],
-        "finished": batch.get("finished", False),
-        "status": batch.get("status", "running"),
-        "registration_mode": batch.get("registration_mode", "outlook_batch"),
-        "created_at": batch.get("created_at"),
-        "updated_at": batch.get("updated_at"),
-        "config_snapshot": batch.get("config_snapshot"),
-        "logs": batch.get("logs", []),
-        "progress": f"{batch['completed']}/{batch['total']}"
-    }
-
-
-@router.post("/outlook-batch/{batch_id}/cancel")
-async def cancel_outlook_batch(batch_id: str):
-    """取消 Outlook 批量任务"""
-    if batch_id not in batch_tasks:
-        raise HTTPException(status_code=404, detail="批量任务不存在")
-
-    batch = batch_tasks[batch_id]
-    if batch.get("finished"):
-        raise HTTPException(status_code=400, detail="批量任务已完成")
-
-    # 同时更新两个系统的取消状态
-    batch["cancelled"] = True
-    task_manager.cancel_batch(batch_id)
-
-    return {"success": True, "message": "批量任务取消请求已提交"}
