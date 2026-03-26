@@ -28,8 +28,11 @@ from src.config.settings import get_settings
 
 
 def _set_env_override(key: str, value) -> None:
-    """覆盖运行时环境变量。"""
+    """仅在环境变量缺失时写入运行时值。"""
     if value is None:
+        return
+    current_value = os.environ.get(key)
+    if current_value not in (None, ""):
         return
     os.environ[key] = str(value)
 

@@ -416,7 +416,8 @@ def print_docker_diagnostics(compose_cmd: Sequence[str]) -> str:
 
 def run_docker_health_check(config: Dict[str, Any], compose_cmd: Sequence[str]) -> None:
     print_section("Docker 部署健康检查")
-    url = f"http://127.0.0.1:{config['port']}/login"
+    host_port = int(config["port"])
+    primary_url = f"http://127.0.0.1:{host_port}/login"
     spinner = ["|", "/", "-", "\\"]
 
     def _progress(attempt: int, elapsed_seconds: int, last_error: str) -> None:
@@ -427,18 +428,35 @@ def run_docker_health_check(config: Dict[str, Any], compose_cmd: Sequence[str]) 
             message += f" 最近错误: {brief_error}"
         print(message, end="", flush=True)
 
-    ok, detail = wait_http_ready(url, progress_callback=_progress)
+    ok, detail = wait_http_ready(primary_url, progress_callback=_progress)
     print()
     if ok:
-        print(f"健康检查通过：{url} ({detail})")
+        print(f"健康检查通过：{primary_url} ({detail})")
         return
 
-    print(f"健康检查失败：{url}，原因：{detail}")
+    fallback_ok = False
+    fallback_detail = ""
+    if host_port != 1455:
+        fallback_url = "http://127.0.0.1:1455/login"
+        print(f"自定义端口 {host_port} 检查失败，追加诊断探测：{fallback_url}")
+        fallback_ok, fallback_detail = wait_http_ready(fallback_url, timeout_seconds=15, interval_seconds=2)
+        if fallback_ok:
+            print(f"诊断结果：1455 可访问（{fallback_detail}），疑似应用仍监听默认端口。")
+        elif fallback_detail:
+            print(f"诊断结果：1455 不可访问（{fallback_detail}）。")
+
+    print(f"健康检查失败：{primary_url}，原因：{detail}")
     diagnostics = print_docker_diagnostics(compose_cmd)
 
     hint = ""
     if "AttributeError: OUTLOOK" in diagnostics:
         hint = " 检测到旧版 OUTLOOK 枚举残留，请先执行 `git pull --ff-only` 更新到最新代码后重试。"
+
+    if fallback_ok:
+        hint += " 检测到 1455 可访问，疑似服务仍监听默认端口。"
+
+    if host_port != 1455 and "0.0.0.0:1455->1455/tcp" in diagnostics and "启动 Web UI 在 http://0.0.0.0:1455" in diagnostics:
+        hint += " 检测到应用实际监听 1455 端口但映射端口为自定义值，请拉取最新代码后重新部署。"
 
     raise DeployError(f"Docker 服务启动后未通过健康检查，请根据上方日志排查。{hint}")
 
