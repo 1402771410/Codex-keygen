@@ -1,6 +1,9 @@
 import asyncio
 from dataclasses import dataclass
 
+import pytest
+from fastapi import HTTPException
+
 from src.config import settings as settings_module
 from src.database import session as session_module
 from src.database.init_db import initialize_database
@@ -33,6 +36,7 @@ def _create_tempmail_service(
     db,
     name: str,
     *,
+    enabled: bool = True,
     last_test_status: str | None = None,
     last_test_message: str | None = None,
 ) -> EmailService:
@@ -46,7 +50,7 @@ def _create_tempmail_service(
             "timeout": 30,
             "max_retries": 3,
         },
-        enabled=True,
+        enabled=enabled,
         priority=10,
         is_builtin=False,
         is_immutable=False,
@@ -212,5 +216,98 @@ def test_email_service_test_route_records_probe_failure_stage(tmp_path, monkeypa
             assert updated.last_test_message.startswith("[wait_otp]")
             assert "获取验证码失败" in updated.last_test_message
             assert updated.last_tested_at is not None
+    finally:
+        _reset_singletons()
+
+
+def test_enable_email_service_requires_real_otp_pass(tmp_path, monkeypatch):
+    _init_test_db(tmp_path, monkeypatch, "email_service_enable_gate.db")
+
+    try:
+        with get_db() as db:
+            ensure_builtin_tempmail_services(db, settings_module.get_settings())
+            unavailable = _create_tempmail_service(
+                db,
+                "Unverified Service",
+                enabled=False,
+                last_test_status="failed",
+                last_test_message="[wait_otp] 获取验证码失败",
+            )
+            available = _create_tempmail_service(
+                db,
+                "Verified Service",
+                enabled=False,
+                last_test_status="success",
+                last_test_message="[otp_received] 已确认收到真实 OpenAI OTP",
+            )
+            unavailable_id = unavailable.id
+            available_id = available.id
+
+        with pytest.raises(HTTPException) as unavailable_error:
+            asyncio.run(email_routes.enable_email_service(unavailable_id))
+        assert unavailable_error.value.status_code == 400
+        assert "OTP" in unavailable_error.value.detail
+
+        result = asyncio.run(email_routes.enable_email_service(available_id))
+        assert result["success"] is True
+
+        with get_db() as db:
+            unavailable_after = db.query(EmailService).filter(EmailService.id == unavailable_id).first()
+            available_after = db.query(EmailService).filter(EmailService.id == available_id).first()
+            assert unavailable_after is not None
+            assert available_after is not None
+            assert unavailable_after.enabled is False
+            assert available_after.enabled is True
+    finally:
+        _reset_singletons()
+
+
+def test_create_and_update_reject_enable_without_otp_pass(tmp_path, monkeypatch):
+    _init_test_db(tmp_path, monkeypatch, "email_service_create_update_gate.db")
+
+    try:
+        with get_db() as db:
+            ensure_builtin_tempmail_services(db, settings_module.get_settings())
+
+        with pytest.raises(HTTPException) as create_error:
+            asyncio.run(
+                email_routes.create_email_service(
+                    email_routes.EmailServiceCreate(
+                        service_type=EmailServiceType.TEMPMAIL.value,
+                        provider="mail_tm",
+                        name="Create Enabled Should Fail",
+                        enabled=True,
+                        config={
+                            "provider": "mail_tm",
+                            "base_url": "https://api.mail.tm",
+                            "timeout": 30,
+                            "max_retries": 3,
+                        },
+                    )
+                )
+            )
+
+        assert create_error.value.status_code == 400
+        assert "先测试通过" in create_error.value.detail
+
+        with get_db() as db:
+            target = _create_tempmail_service(
+                db,
+                "Update Gate Target",
+                enabled=False,
+                last_test_status="failed",
+                last_test_message="[wait_otp] 获取验证码失败",
+            )
+
+        with pytest.raises(HTTPException) as update_error:
+            asyncio.run(
+                email_routes.update_email_service(
+                    target.id,
+                    email_routes.EmailServiceUpdate(enabled=True),
+                )
+            )
+
+        assert update_error.value.status_code == 400
+        assert "OTP" in update_error.value.detail
     finally:
         _reset_singletons()

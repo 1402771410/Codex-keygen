@@ -50,6 +50,20 @@ def _compose_stage_message(stage: str, message: str) -> str:
     return f"[{normalized_stage}] {message}"
 
 
+def _is_tempmail_service_available(service: EmailServiceModel) -> bool:
+    """判断临时邮箱服务是否通过真实 OTP 可用性校验。"""
+    test_status = str(service.last_test_status or "").strip().lower()
+    test_message = str(service.last_test_message or "").strip().lower()
+    return test_status == "success" and "[otp_received]" in test_message
+
+
+def _ensure_service_can_enable(service: EmailServiceModel) -> None:
+    """仅允许启用通过真实 OTP 探测的服务。"""
+    if _is_tempmail_service_available(service):
+        return
+    raise HTTPException(status_code=400, detail="服务未通过真实 OTP 测试，暂不可启用")
+
+
 class EmailServiceCreate(BaseModel):
     """创建临时邮箱服务请求。"""
 
@@ -57,7 +71,7 @@ class EmailServiceCreate(BaseModel):
     provider: str = "tempmail_lol"
     name: str
     config: Dict[str, Any] = Field(default_factory=dict)
-    enabled: bool = True
+    enabled: bool = False
     priority: int = 0
 
 
@@ -85,6 +99,8 @@ class EmailServiceResponse(BaseModel):
     priority: int
     config: Dict[str, Any] = Field(default_factory=dict)
     provider_runtime_meta: Dict[str, Any] = Field(default_factory=dict)
+    available: bool
+    availability_status: str
     last_test_status: Optional[str] = None
     last_tested_at: Optional[str] = None
     last_test_message: Optional[str] = None
@@ -134,6 +150,7 @@ def _service_to_response(service: EmailServiceModel) -> EmailServiceResponse:
             "default_base_url": str(provider_meta.get("default_base_url") or ""),
         }
 
+    available = _is_tempmail_service_available(service)
     return EmailServiceResponse(
         id=service.id,
         service_type=service.service_type,
@@ -147,6 +164,8 @@ def _service_to_response(service: EmailServiceModel) -> EmailServiceResponse:
         priority=service.priority,
         config=config,
         provider_runtime_meta=provider_runtime_meta,
+        available=available,
+        availability_status="available" if available else "unavailable",
         last_test_status=service.last_test_status,
         last_tested_at=service.last_tested_at.isoformat() if service.last_tested_at else None,
         last_test_message=service.last_test_message,
@@ -276,6 +295,9 @@ async def create_email_service(request: EmailServiceCreate):
         if exists:
             raise HTTPException(status_code=400, detail="服务名称已存在")
 
+        if request.enabled:
+            raise HTTPException(status_code=400, detail="新增规则需先测试通过后才能启用")
+
         normalized_config = _normalize_tempmail_config(request.config, provider_hint=provider)
         provider_meta = get_tempmail_provider_meta(provider)
         provider_runtime_meta = {
@@ -332,6 +354,8 @@ async def update_email_service(service_id: int, request: EmailServiceUpdate):
             service.config = _normalize_tempmail_config(merged, provider_hint=service.provider)
 
         if request.enabled is not None:
+            if request.enabled:
+                _ensure_service_can_enable(service)
             service.enabled = request.enabled
 
         if request.priority is not None:
@@ -440,6 +464,7 @@ async def enable_email_service(service_id: int):
         if not service:
             raise HTTPException(status_code=404, detail="服务不存在")
         _ensure_tempmail_type(service.service_type)
+        _ensure_service_can_enable(service)
 
         service.enabled = True
         db.commit()
