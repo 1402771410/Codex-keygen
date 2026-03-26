@@ -7,10 +7,15 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from ...config.settings import get_settings, update_settings
+from ...config.settings import get_settings
+from ...core.register import RegistrationEngine
 from ...database.models import EmailService as EmailServiceModel
 from ...database.session import get_db
-from ...database.tempmail_bootstrap import ensure_builtin_tempmail_services, is_global_tempmail_service
+from ...database.tempmail_bootstrap import (
+    ensure_builtin_tempmail_services,
+    get_tempmail_runtime_state,
+    update_tempmail_runtime_state,
+)
 from ...services import EmailServiceFactory, EmailServiceType
 from ...services.tempmail_catalog import (
     build_tempmail_config,
@@ -37,6 +42,12 @@ def _ensure_tempmail_type(service_type: str) -> None:
 def _ensure_builtin_seeded(db) -> None:
     settings = get_settings()
     ensure_builtin_tempmail_services(db, settings)
+
+
+def _compose_stage_message(stage: str, message: str) -> str:
+    """拼接阶段化测试消息，供 DB 存储与前端展示。"""
+    normalized_stage = (stage or "unknown").strip() or "unknown"
+    return f"[{normalized_stage}] {message}"
 
 
 class EmailServiceCreate(BaseModel):
@@ -73,6 +84,10 @@ class EmailServiceResponse(BaseModel):
     builtin_key: Optional[str] = None
     priority: int
     config: Dict[str, Any] = Field(default_factory=dict)
+    provider_runtime_meta: Dict[str, Any] = Field(default_factory=dict)
+    last_test_status: Optional[str] = None
+    last_tested_at: Optional[str] = None
+    last_test_message: Optional[str] = None
     last_used: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
@@ -92,6 +107,8 @@ class ServiceTestResult(BaseModel):
     """服务测试结果。"""
 
     success: bool
+    status: str
+    stage: str
     message: str
     details: Optional[Dict[str, Any]] = None
 
@@ -108,6 +125,14 @@ def _service_to_response(service: EmailServiceModel) -> EmailServiceResponse:
     provider = normalize_tempmail_provider(service.provider or (service.config or {}).get("provider"))
     provider_meta = get_tempmail_provider_meta(provider)
     config = _normalize_tempmail_config(service.config, provider_hint=provider)
+    provider_runtime_meta = dict(service.provider_runtime_meta or {})
+    if not provider_runtime_meta:
+        provider_runtime_meta = {
+            "provider": provider,
+            "provider_label": str(provider_meta.get("label") or provider),
+            "call_style": str(provider_meta.get("call_style") or ""),
+            "default_base_url": str(provider_meta.get("default_base_url") or ""),
+        }
 
     return EmailServiceResponse(
         id=service.id,
@@ -121,6 +146,10 @@ def _service_to_response(service: EmailServiceModel) -> EmailServiceResponse:
         builtin_key=service.builtin_key,
         priority=service.priority,
         config=config,
+        provider_runtime_meta=provider_runtime_meta,
+        last_test_status=service.last_test_status,
+        last_tested_at=service.last_tested_at.isoformat() if service.last_tested_at else None,
+        last_test_message=service.last_test_message,
         last_used=service.last_used.isoformat() if service.last_used else None,
         created_at=service.created_at.isoformat() if service.created_at else None,
         updated_at=service.updated_at.isoformat() if service.updated_at else None,
@@ -138,21 +167,22 @@ def _guard_immutable_update(service: EmailServiceModel, request: EmailServiceUpd
 @router.get("/stats")
 async def get_email_services_stats():
     """获取临时邮箱服务统计。"""
+    settings = get_settings()
     with get_db() as db:
         _ensure_builtin_seeded(db)
+        runtime_state = get_tempmail_runtime_state(db, settings)
         total = db.query(EmailServiceModel).filter(EmailServiceModel.service_type == EmailServiceType.TEMPMAIL.value).count()
         enabled_count = db.query(EmailServiceModel).filter(
             EmailServiceModel.service_type == EmailServiceType.TEMPMAIL.value,
             EmailServiceModel.enabled == True,
         ).count()
 
-    settings = get_settings()
     return {
         "tempmail_count": total,
         "enabled_count": enabled_count,
-        "global_enabled": settings.tempmail_enabled,
-        "selection_mode": settings.tempmail_selection_mode,
-        "single_service_id": settings.tempmail_single_service_id,
+        "global_enabled": runtime_state["global_enabled"],
+        "selection_mode": runtime_state["selection_mode"],
+        "single_service_id": runtime_state["single_service_id"],
     }
 
 
@@ -247,6 +277,13 @@ async def create_email_service(request: EmailServiceCreate):
             raise HTTPException(status_code=400, detail="服务名称已存在")
 
         normalized_config = _normalize_tempmail_config(request.config, provider_hint=provider)
+        provider_meta = get_tempmail_provider_meta(provider)
+        provider_runtime_meta = {
+            "provider": provider,
+            "provider_label": str(provider_meta.get("label") or provider),
+            "call_style": str(provider_meta.get("call_style") or ""),
+            "default_base_url": str(provider_meta.get("default_base_url") or ""),
+        }
         service = EmailServiceModel(
             service_type=EmailServiceType.TEMPMAIL.value,
             provider=provider,
@@ -257,6 +294,7 @@ async def create_email_service(request: EmailServiceCreate):
             is_builtin=False,
             is_immutable=False,
             builtin_key=None,
+            provider_runtime_meta=provider_runtime_meta,
         )
         db.add(service)
         db.commit()
@@ -295,11 +333,17 @@ async def update_email_service(service_id: int, request: EmailServiceUpdate):
 
         if request.enabled is not None:
             service.enabled = request.enabled
-            if is_global_tempmail_service(service):
-                update_settings(tempmail_enabled=bool(request.enabled))
 
         if request.priority is not None:
             service.priority = request.priority
+
+        provider_meta = get_tempmail_provider_meta(service.provider)
+        service.provider_runtime_meta = {
+            "provider": service.provider,
+            "provider_label": str(provider_meta.get("label") or service.provider),
+            "call_style": str(provider_meta.get("call_style") or ""),
+            "default_base_url": str(provider_meta.get("default_base_url") or ""),
+        }
 
         db.commit()
         db.refresh(service)
@@ -320,21 +364,22 @@ async def delete_email_service(service_id: int):
         if service.is_immutable:
             raise HTTPException(status_code=400, detail="固定内置服务不可删除")
 
-        current_settings = get_settings()
-        clear_single_service_id = current_settings.tempmail_single_service_id == service.id
+        settings = get_settings()
+        runtime_state = get_tempmail_runtime_state(db, settings)
+        clear_single_service_id = runtime_state["single_service_id"] == service.id
         service_name = service.name
         db.delete(service)
         db.commit()
 
         if clear_single_service_id:
-            update_settings(tempmail_single_service_id=None)
+            update_tempmail_runtime_state(db, settings, single_service_id=None)
 
         return {"success": True, "message": f"服务 {service_name} 已删除"}
 
 
 @router.post("/{service_id}/test", response_model=ServiceTestResult)
 async def test_email_service(service_id: int):
-    """测试临时邮箱服务可用性。"""
+    """执行真实 OpenAI OTP 探测并记录结果。"""
     with get_db() as db:
         _ensure_builtin_seeded(db)
 
@@ -343,19 +388,46 @@ async def test_email_service(service_id: int):
             raise HTTPException(status_code=404, detail="服务不存在")
         _ensure_tempmail_type(service.service_type)
 
-        if service.is_immutable:
-            raise HTTPException(status_code=400, detail="固定内置服务仅允许启用/禁用")
-
         try:
             config = _normalize_tempmail_config(service.config, provider_hint=service.provider)
             email_service = EmailServiceFactory.create(EmailServiceType.TEMPMAIL, config, name=service.name)
-            health = email_service.check_health()
-            if health:
-                return ServiceTestResult(success=True, message="服务连接正常")
-            return ServiceTestResult(success=False, message="服务连接失败")
+
+            probe_engine = RegistrationEngine(
+                email_service=email_service,
+                proxy_url=config.get("proxy_url"),
+                callback_logger=lambda msg: logger.info("[OTP探测][%s] %s", service.name, msg),
+            )
+            probe_result = probe_engine.run_otp_probe()
+
+            service.last_tested_at = datetime.utcnow()
+            service.last_test_status = "success" if probe_result.success else "failed"
+            service.last_test_message = _compose_stage_message(probe_result.stage, probe_result.message)
+            db.commit()
+
+            return ServiceTestResult(
+                success=probe_result.success,
+                status=service.last_test_status,
+                stage=probe_result.stage,
+                message=probe_result.message,
+                details={
+                    "email": probe_result.email,
+                    "is_existing_account": probe_result.is_existing_account,
+                    "persisted_message": service.last_test_message,
+                },
+            )
         except Exception as exc:
-            logger.error("测试临时邮箱服务失败: %s", exc)
-            return ServiceTestResult(success=False, message=f"测试失败: {exc}")
+            logger.error("真实 OTP 探测失败: %s", exc)
+            service.last_test_status = "failed"
+            service.last_tested_at = datetime.utcnow()
+            service.last_test_message = _compose_stage_message("probe_exception", str(exc))
+            db.commit()
+            return ServiceTestResult(
+                success=False,
+                status=service.last_test_status,
+                stage="probe_exception",
+                message=f"真实 OTP 探测失败: {exc}",
+                details={"persisted_message": service.last_test_message},
+            )
 
 
 @router.post("/{service_id}/enable")
@@ -372,8 +444,10 @@ async def enable_email_service(service_id: int):
         service.enabled = True
         db.commit()
 
-        if is_global_tempmail_service(service):
-            update_settings(tempmail_enabled=True)
+        settings = get_settings()
+        runtime_state = get_tempmail_runtime_state(db, settings)
+        if runtime_state["global_service_id"] == service.id:
+            update_tempmail_runtime_state(db, settings, global_enabled=True)
 
         return {"success": True, "message": f"服务 {service.name} 已启用"}
 
@@ -393,16 +467,17 @@ async def disable_email_service(service_id: int):
         db.commit()
 
         settings = get_settings()
-        updates: Dict[str, Any] = {}
+        runtime_state = get_tempmail_runtime_state(db, settings)
+        runtime_updates: Dict[str, Any] = {}
 
-        if is_global_tempmail_service(service):
-            updates["tempmail_enabled"] = False
+        if runtime_state["global_service_id"] == service.id:
+            runtime_updates["global_enabled"] = False
 
-        if settings.tempmail_single_service_id == service.id:
-            updates["tempmail_single_service_id"] = None
+        if runtime_state["single_service_id"] == service.id:
+            runtime_updates["single_service_id"] = None
 
-        if updates:
-            update_settings(**updates)
+        if runtime_updates:
+            update_tempmail_runtime_state(db, settings, **runtime_updates)
 
         return {"success": True, "message": f"服务 {service.name} 已禁用"}
 

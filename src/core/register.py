@@ -83,6 +83,17 @@ class SignupFormResult:
     error_message: str = ""
 
 
+@dataclass
+class OTPProbeResult:
+    """真实 OTP 探测结果。"""
+
+    success: bool
+    stage: str
+    message: str
+    email: str = ""
+    is_existing_account: bool = False
+
+
 class RegistrationEngine:
     """
     注册引擎
@@ -896,6 +907,153 @@ class RegistrationEngine:
         except Exception as e:
             self._log(f"处理 OAuth 回调失败: {e}", "error")
             return None
+
+    def run_otp_probe(self) -> OTPProbeResult:
+        """执行最小化真实 OTP 探测（收到验证码即结束）。"""
+        stage = "start"
+
+        try:
+            self._log("=" * 60)
+            self._log("开始真实 OTP 探测流程（收到 OTP 即停止）")
+            self._log("=" * 60)
+
+            stage = "check_ip"
+            self._log("探测 1/10: 检查 IP 地理位置...")
+            ip_ok, location = self._check_ip_location()
+            if not ip_ok:
+                return OTPProbeResult(
+                    success=False,
+                    stage=stage,
+                    message=f"IP 地理位置不支持: {location}",
+                    email=self.email or "",
+                    is_existing_account=self._is_existing_account,
+                )
+
+            self._log(f"探测 IP 位置: {location}")
+
+            stage = "create_email"
+            self._log("探测 2/10: 创建邮箱...")
+            if not self._create_email():
+                return OTPProbeResult(
+                    success=False,
+                    stage=stage,
+                    message="创建邮箱失败",
+                    email=self.email or "",
+                    is_existing_account=self._is_existing_account,
+                )
+
+            stage = "init_session"
+            self._log("探测 3/10: 初始化会话...")
+            if not self._init_session():
+                return OTPProbeResult(
+                    success=False,
+                    stage=stage,
+                    message="初始化会话失败",
+                    email=self.email or "",
+                    is_existing_account=self._is_existing_account,
+                )
+
+            stage = "start_oauth"
+            self._log("探测 4/10: 开始 OAuth 授权流程...")
+            if not self._start_oauth():
+                return OTPProbeResult(
+                    success=False,
+                    stage=stage,
+                    message="开始 OAuth 流程失败",
+                    email=self.email or "",
+                    is_existing_account=self._is_existing_account,
+                )
+
+            stage = "get_device_id"
+            self._log("探测 5/10: 获取 Device ID...")
+            did = self._get_device_id()
+            if not did:
+                return OTPProbeResult(
+                    success=False,
+                    stage=stage,
+                    message="获取 Device ID 失败",
+                    email=self.email or "",
+                    is_existing_account=self._is_existing_account,
+                )
+
+            stage = "check_sentinel"
+            self._log("探测 6/10: 检查 Sentinel 拦截...")
+            sen_token = self._check_sentinel(did)
+            if sen_token:
+                self._log("探测 Sentinel 检查通过")
+            else:
+                self._log("探测 Sentinel 检查失败或未启用", "warning")
+
+            stage = "submit_signup"
+            self._log("探测 7/10: 提交注册表单...")
+            signup_result = self._submit_signup_form(did, sen_token)
+            if not signup_result.success:
+                return OTPProbeResult(
+                    success=False,
+                    stage=stage,
+                    message=f"提交注册表单失败: {signup_result.error_message}",
+                    email=self.email or "",
+                    is_existing_account=self._is_existing_account,
+                )
+
+            if self._is_existing_account:
+                stage = "send_otp"
+                self._log("探测 8/10: 已注册账号，跳过发送验证码，使用自动发送 OTP")
+                self._otp_sent_at = time.time()
+            else:
+                stage = "register_password"
+                self._log("探测 8/10: 注册密码...")
+                password_ok, _password = self._register_password()
+                if not password_ok:
+                    return OTPProbeResult(
+                        success=False,
+                        stage=stage,
+                        message="注册密码失败",
+                        email=self.email or "",
+                        is_existing_account=self._is_existing_account,
+                    )
+
+                stage = "send_otp"
+                self._log("探测 9/10: 发送验证码...")
+                if not self._send_verification_code():
+                    return OTPProbeResult(
+                        success=False,
+                        stage=stage,
+                        message="发送验证码失败",
+                        email=self.email or "",
+                        is_existing_account=self._is_existing_account,
+                    )
+
+            stage = "wait_otp"
+            self._log("探测 10/10: 等待验证码...")
+            code = self._get_verification_code()
+            if not code:
+                return OTPProbeResult(
+                    success=False,
+                    stage=stage,
+                    message="获取验证码失败",
+                    email=self.email or "",
+                    is_existing_account=self._is_existing_account,
+                )
+
+            return OTPProbeResult(
+                success=True,
+                stage="otp_received",
+                message="已确认收到真实 OpenAI OTP",
+                email=self.email or "",
+                is_existing_account=self._is_existing_account,
+            )
+
+        except Exception as e:
+            failed_stage = stage if stage != "start" else "unexpected"
+            self._log(f"真实 OTP 探测异常({failed_stage}): {e}", "error")
+            return OTPProbeResult(
+                success=False,
+                stage=failed_stage,
+                message=str(e),
+                email=self.email or "",
+                is_existing_account=self._is_existing_account,
+            )
 
     def run(self) -> RegistrationResult:
         """

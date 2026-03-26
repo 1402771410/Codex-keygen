@@ -1,0 +1,216 @@
+import asyncio
+from dataclasses import dataclass
+
+from src.config import settings as settings_module
+from src.database import session as session_module
+from src.database.init_db import initialize_database
+from src.database.models import EmailService
+from src.database.session import get_db
+from src.database.tempmail_bootstrap import (
+    ensure_builtin_tempmail_services,
+    update_tempmail_runtime_state,
+)
+from src.services import EmailServiceType
+from src.web.routes import email as email_routes
+from src.web.routes import registration as registration_routes
+
+
+def _reset_singletons() -> None:
+    settings_module._settings = None
+    session_module._db_manager = None
+
+
+def _init_test_db(tmp_path, monkeypatch, filename: str) -> str:
+    db_path = tmp_path / filename
+    db_url = f"sqlite:///{db_path.as_posix()}"
+    monkeypatch.setenv("APP_DATABASE_URL", db_url)
+    _reset_singletons()
+    initialize_database(db_url)
+    return db_url
+
+
+def _create_tempmail_service(
+    db,
+    name: str,
+    *,
+    last_test_status: str | None = None,
+    last_test_message: str | None = None,
+) -> EmailService:
+    service = EmailService(
+        service_type=EmailServiceType.TEMPMAIL.value,
+        provider="mail_tm",
+        name=name,
+        config={
+            "provider": "mail_tm",
+            "base_url": "https://api.mail.tm",
+            "timeout": 30,
+            "max_retries": 3,
+        },
+        enabled=True,
+        priority=10,
+        is_builtin=False,
+        is_immutable=False,
+        last_test_status=last_test_status,
+        last_test_message=last_test_message,
+    )
+    db.add(service)
+    db.commit()
+    db.refresh(service)
+    return service
+
+
+@dataclass
+class _FakeProbeResult:
+    success: bool
+    stage: str
+    message: str
+    email: str = ""
+    is_existing_account: bool = False
+
+
+class _DummyEmailService:
+    def check_health(self):
+        raise AssertionError("真实 OTP 探测路径不应调用 check_health")
+
+
+def test_available_services_only_include_real_otp_passed(tmp_path, monkeypatch):
+    _init_test_db(tmp_path, monkeypatch, "available_services_otp_gate.db")
+
+    try:
+        with get_db() as db:
+            ensure_builtin_tempmail_services(db, settings_module.get_settings())
+
+            passed = _create_tempmail_service(
+                db,
+                "OTP Passed",
+                last_test_status="success",
+                last_test_message="[otp_received] 已确认收到真实 OpenAI OTP",
+            )
+            passed_id = passed.id
+            _create_tempmail_service(
+                db,
+                "Old Health Success",
+                last_test_status="success",
+                last_test_message="服务连接正常",
+            )
+            _create_tempmail_service(
+                db,
+                "OTP Failed",
+                last_test_status="failed",
+                last_test_message="[wait_otp] 获取验证码失败",
+            )
+            _create_tempmail_service(db, "Never Tested")
+
+            update_tempmail_runtime_state(
+                db,
+                settings_module.get_settings(),
+                selection_mode="single",
+                single_service_id=passed_id,
+            )
+
+        payload = asyncio.run(registration_routes.get_available_email_services())
+        service_ids = {item["id"] for item in payload["tempmail"]["services"]}
+
+        assert service_ids == {passed_id}
+        assert payload["tempmail"]["available"] is True
+        assert payload["tempmail"]["count"] == 1
+        assert payload["selection"]["mode"] == "single"
+        assert payload["selection"]["single_service_id"] == passed_id
+    finally:
+        _reset_singletons()
+
+
+def test_email_service_test_route_records_probe_success_stage(tmp_path, monkeypatch):
+    _init_test_db(tmp_path, monkeypatch, "email_service_probe_success.db")
+
+    try:
+        with get_db() as db:
+            ensure_builtin_tempmail_services(db, settings_module.get_settings())
+            target = _create_tempmail_service(db, "Probe Success Target")
+
+        monkeypatch.setattr(
+            email_routes.EmailServiceFactory,
+            "create",
+            staticmethod(lambda *_args, **_kwargs: _DummyEmailService()),
+        )
+
+        class _FakeSuccessEngine:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def run_otp_probe(self) -> _FakeProbeResult:
+                return _FakeProbeResult(
+                    success=True,
+                    stage="otp_received",
+                    message="已确认收到真实 OpenAI OTP",
+                    email="probe-success@example.com",
+                    is_existing_account=False,
+                )
+
+        monkeypatch.setattr(email_routes, "RegistrationEngine", _FakeSuccessEngine)
+
+        result = asyncio.run(email_routes.test_email_service(target.id))
+
+        assert result.success is True
+        assert result.status == "success"
+        assert result.stage == "otp_received"
+        assert result.message == "已确认收到真实 OpenAI OTP"
+
+        with get_db() as db:
+            updated = db.query(EmailService).filter(EmailService.id == target.id).first()
+            assert updated is not None
+            assert updated.last_test_status == "success"
+            assert isinstance(updated.last_test_message, str)
+            assert updated.last_test_message.startswith("[otp_received]")
+            assert "已确认收到真实 OpenAI OTP" in updated.last_test_message
+            assert updated.last_tested_at is not None
+    finally:
+        _reset_singletons()
+
+
+def test_email_service_test_route_records_probe_failure_stage(tmp_path, monkeypatch):
+    _init_test_db(tmp_path, monkeypatch, "email_service_probe_failure.db")
+
+    try:
+        with get_db() as db:
+            ensure_builtin_tempmail_services(db, settings_module.get_settings())
+            target = _create_tempmail_service(db, "Probe Failure Target")
+
+        monkeypatch.setattr(
+            email_routes.EmailServiceFactory,
+            "create",
+            staticmethod(lambda *_args, **_kwargs: _DummyEmailService()),
+        )
+
+        class _FakeFailureEngine:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def run_otp_probe(self) -> _FakeProbeResult:
+                return _FakeProbeResult(
+                    success=False,
+                    stage="wait_otp",
+                    message="获取验证码失败",
+                    email="probe-failure@example.com",
+                    is_existing_account=False,
+                )
+
+        monkeypatch.setattr(email_routes, "RegistrationEngine", _FakeFailureEngine)
+
+        result = asyncio.run(email_routes.test_email_service(target.id))
+
+        assert result.success is False
+        assert result.status == "failed"
+        assert result.stage == "wait_otp"
+        assert result.message == "获取验证码失败"
+
+        with get_db() as db:
+            updated = db.query(EmailService).filter(EmailService.id == target.id).first()
+            assert updated is not None
+            assert updated.last_test_status == "failed"
+            assert isinstance(updated.last_test_message, str)
+            assert updated.last_test_message.startswith("[wait_otp]")
+            assert "获取验证码失败" in updated.last_test_message
+            assert updated.last_tested_at is not None
+    finally:
+        _reset_singletons()

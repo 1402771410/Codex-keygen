@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from ...database import crud
 from ...database.session import get_db
 from ...database.models import RegistrationTask, Proxy
-from ...database.tempmail_bootstrap import ensure_builtin_tempmail_services
+from ...database.tempmail_bootstrap import ensure_builtin_tempmail_services, get_tempmail_runtime_state
 from ...core.register import RegistrationEngine, RegistrationResult
 from ...services import EmailServiceFactory, EmailServiceType
 from ...services.tempmail_catalog import build_tempmail_config, get_tempmail_provider_meta
@@ -273,10 +273,11 @@ def _get_loop_window_state(
 
 
 def _select_tempmail_service(db, settings, explicit_service_id: Optional[int]):
-    """根据请求与设置选择临时邮箱服务。"""
+    """根据请求与运行时规则选择临时邮箱服务。"""
     from ...database.models import EmailService as EmailServiceModel
 
     ensure_builtin_tempmail_services(db, settings)
+    runtime_state = get_tempmail_runtime_state(db, settings)
 
     base_query = db.query(EmailServiceModel).filter(
         EmailServiceModel.service_type == EmailServiceType.TEMPMAIL.value,
@@ -289,9 +290,9 @@ def _select_tempmail_service(db, settings, explicit_service_id: Optional[int]):
             raise ValueError(f"临时邮箱服务不存在或已禁用: {explicit_service_id}")
         return selected
 
-    selection_mode = str(settings.tempmail_selection_mode or "single").strip().lower()
+    selection_mode = str(runtime_state["selection_mode"] or "single").strip().lower()
     if selection_mode == "single":
-        single_service_id = settings.tempmail_single_service_id
+        single_service_id = runtime_state["single_service_id"]
         if single_service_id:
             selected = base_query.filter(EmailServiceModel.id == single_service_id).first()
             if selected:
@@ -373,36 +374,23 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
             settings = get_settings()
             selected_service = _select_and_mark_tempmail_service(db, settings, email_service_id)
 
-            config = _normalize_email_service_config(
-                service_type,
-                {
-                    "provider": "tempmail_lol",
-                    "base_url": settings.tempmail_base_url,
-                    "timeout": settings.tempmail_timeout,
-                    "max_retries": settings.tempmail_max_retries,
-                },
-                actual_proxy_url,
-            )
+            if not selected_service:
+                raise ValueError("没有可用的启用临时邮箱服务，请先在临时邮箱池中启用至少一个服务")
 
-            if selected_service:
-                service_type = EmailServiceType.TEMPMAIL
-                selected_config = dict(cast(dict, selected_service.config or {}))
-                provider = str(selected_service.provider or selected_config.get("provider") or "tempmail_lol")
-                selected_config["provider"] = provider
-                config.update(_normalize_email_service_config(service_type, selected_config, actual_proxy_url))
-                crud.update_registration_task(db, task_uuid, email_service_id=selected_service.id)
-                provider_meta = get_tempmail_provider_meta(provider)
-                logger.info(
-                    "使用临时邮箱池服务: %s (ID: %s, provider: %s, priority: %s)",
-                    selected_service.name,
-                    selected_service.id,
-                    provider_meta.get("label") or provider,
-                    selected_service.priority,
-                )
-            else:
-                if not settings.tempmail_enabled:
-                    raise ValueError("全局临时邮箱已关闭，且没有可用的启用服务")
-                logger.info("未配置临时邮箱池服务，回退到全局 tempmail 配置")
+            service_type = EmailServiceType.TEMPMAIL
+            selected_config = dict(cast(dict, selected_service.config or {}))
+            provider = str(selected_service.provider or selected_config.get("provider") or "tempmail_lol")
+            selected_config["provider"] = provider
+            config = _normalize_email_service_config(service_type, selected_config, actual_proxy_url)
+            crud.update_registration_task(db, task_uuid, email_service_id=selected_service.id)
+            provider_meta = get_tempmail_provider_meta(provider)
+            logger.info(
+                "使用临时邮箱池服务: %s (ID: %s, provider: %s, priority: %s)",
+                selected_service.name,
+                selected_service.id,
+                provider_meta.get("label") or provider,
+                selected_service.priority,
+            )
 
             email_service = EmailServiceFactory.create(service_type, config)
 
@@ -1886,9 +1874,14 @@ async def get_available_email_services():
     from ...database.models import EmailService as EmailServiceModel
     settings = get_settings()
     services = []
+    runtime_state = {
+        "selection_mode": "single",
+        "single_service_id": None,
+    }
 
     with get_db() as db:
         ensure_builtin_tempmail_services(db, settings)
+        runtime_state = get_tempmail_runtime_state(db, settings)
         db_services = db.query(EmailServiceModel).filter(
             EmailServiceModel.service_type == "tempmail",
             EmailServiceModel.enabled == True,
@@ -1898,6 +1891,11 @@ async def get_available_email_services():
         ).all()
 
         for service in db_services:
+            test_status = str(service.last_test_status or "").strip().lower()
+            test_message = str(service.last_test_message or "").strip().lower()
+            if test_status != "success" or "[otp_received]" not in test_message:
+                continue
+
             config = service.config or {}
             provider = str(service.provider or config.get("provider") or "tempmail_lol")
             provider_meta = get_tempmail_provider_meta(provider)
@@ -1916,19 +1914,6 @@ async def get_available_email_services():
                 ),
             })
 
-    if not services and settings.tempmail_enabled:
-        services.append({
-            "id": None,
-            "name": "Tempmail.lol 默认",
-            "type": "tempmail",
-            "provider": "tempmail_lol",
-            "provider_label": "Tempmail.lol",
-            "is_builtin": True,
-            "is_immutable": True,
-            "priority": 0,
-            "description": f"API: {settings.tempmail_base_url}",
-        })
-
     return {
         "tempmail": {
             "available": bool(services),
@@ -1936,7 +1921,7 @@ async def get_available_email_services():
             "services": services,
         },
         "selection": {
-            "mode": settings.tempmail_selection_mode,
-            "single_service_id": settings.tempmail_single_service_id,
+            "mode": runtime_state["selection_mode"],
+            "single_service_id": runtime_state["single_service_id"],
         },
     }
