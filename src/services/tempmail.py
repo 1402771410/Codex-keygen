@@ -25,6 +25,8 @@ class TempmailService(BaseEmailService):
         super().__init__(EmailServiceType.TEMPMAIL, str(name or "tempmail_service"))
 
         source = dict(config or {})
+        if "api_url" in source and "base_url" not in source:
+            source["base_url"] = source.get("api_url")
         provider = normalize_tempmail_provider(source.get("provider"))
         provider_meta = get_tempmail_provider_meta(provider)
         base_url = str(source.get("base_url") or provider_meta.get("default_base_url") or "").strip()
@@ -51,16 +53,17 @@ class TempmailService(BaseEmailService):
 
     def create_email(self, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """创建临时邮箱。"""
-        provider = normalize_tempmail_provider((config or {}).get("provider") or self.config.get("provider"))
+        runtime_config = self._resolve_runtime_config(config)
+        provider = runtime_config["provider"]
         try:
             if provider == "tempmail_lol":
                 email_info = self._create_email_tempmail_lol()
             elif provider in self._MAIL_TM_LIKE_PROVIDERS:
-                email_info = self._create_email_mail_tm_like(provider, config)
+                email_info = self._create_email_mail_tm_like(provider, runtime_config)
             elif provider == "onesecmail":
-                email_info = self._create_email_onesecmail()
+                email_info = self._create_email_onesecmail(runtime_config)
             elif provider == "guerrillamail":
-                email_info = self._create_email_guerrillamail(config)
+                email_info = self._create_email_guerrillamail(runtime_config)
             else:
                 raise EmailServiceError(f"不支持的临时邮箱供应商: {provider}")
 
@@ -82,7 +85,8 @@ class TempmailService(BaseEmailService):
         otp_sent_at: Optional[float] = None,
     ) -> Optional[str]:
         """从目标临时邮箱中轮询获取验证码。"""
-        provider = normalize_tempmail_provider(self.config.get("provider"))
+        runtime_config = self._resolve_runtime_config()
+        provider = runtime_config["provider"]
         email_info = self._email_cache.get(email) or {}
 
         if provider == "tempmail_lol":
@@ -94,7 +98,7 @@ class TempmailService(BaseEmailService):
             if not token:
                 logger.warning("mail.tm/mail.gw 缺少 token，无法获取验证码")
                 return None
-            return self._poll_mail_tm_like(email, token, timeout, pattern, otp_sent_at)
+            return self._poll_mail_tm_like(email, token, timeout, pattern, otp_sent_at, runtime_config)
 
         if provider == "onesecmail":
             login = str(email_info.get("login") or "").strip()
@@ -102,14 +106,14 @@ class TempmailService(BaseEmailService):
             if not login or not domain:
                 logger.warning("1secmail 缺少 login/domain，无法获取验证码")
                 return None
-            return self._poll_onesecmail(email, login, domain, timeout, pattern)
+            return self._poll_onesecmail(email, login, domain, timeout, pattern, runtime_config)
 
         if provider == "guerrillamail":
             sid_token = str(email_id or email_info.get("token") or "").strip()
             if not sid_token:
                 logger.warning("GuerrillaMail 缺少 sid_token，无法获取验证码")
                 return None
-            return self._poll_guerrillamail(email, sid_token, timeout, pattern)
+            return self._poll_guerrillamail(email, sid_token, timeout, pattern, runtime_config)
 
         logger.warning("未知供应商 %s，无法获取验证码", provider)
         return None
@@ -134,8 +138,9 @@ class TempmailService(BaseEmailService):
 
     def check_health(self) -> bool:
         """检查当前供应商可用性。"""
-        provider = normalize_tempmail_provider(self.config.get("provider"))
-        base_url = self._base_url
+        runtime_config = self._resolve_runtime_config()
+        provider = runtime_config["provider"]
+        base_url = str(runtime_config.get("base_url") or "").strip().rstrip("/")
         if not base_url:
             self.update_status(False, EmailServiceError("base_url 为空"))
             return False
@@ -144,11 +149,35 @@ class TempmailService(BaseEmailService):
             if provider == "tempmail_lol":
                 self.http_client.get(f"{base_url}/inbox/create", timeout=10)
             elif provider in self._MAIL_TM_LIKE_PROVIDERS:
-                self.http_client.get(f"{base_url}/domains", timeout=10)
+                domains_url = self._resolve_endpoint_url(runtime_config, "domains_path", "/domains")
+                self.http_client.get(
+                    domains_url,
+                    **self._build_request_kwargs(
+                        runtime_config,
+                        headers={"Accept": "application/json"},
+                        timeout=10,
+                    ),
+                )
             elif provider == "onesecmail":
-                self.http_client.get(base_url, params={"action": "getDomainList"}, timeout=10)
+                self.http_client.get(
+                    base_url,
+                    **self._build_request_kwargs(
+                        runtime_config,
+                        headers={"Accept": "application/json"},
+                        params={"action": "getDomainList"},
+                        timeout=10,
+                    ),
+                )
             elif provider == "guerrillamail":
-                self.http_client.get(base_url, params={"f": "get_email_address"}, timeout=10)
+                self.http_client.get(
+                    base_url,
+                    **self._build_request_kwargs(
+                        runtime_config,
+                        headers={"Accept": "application/json"},
+                        params={"f": "get_email_address"},
+                        timeout=10,
+                    ),
+                )
             else:
                 self.update_status(False, EmailServiceError(f"未知供应商: {provider}"))
                 return False
@@ -234,13 +263,14 @@ class TempmailService(BaseEmailService):
             "created_at": time.time(),
         }
 
-    def _create_email_mail_tm_like(self, provider: str, config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        base_url = self._base_url
-        preferred_domain = str((config or {}).get("preferred_domain") or self.config.get("preferred_domain") or "").strip()
-        address_prefix = str((config or {}).get("address_prefix") or self.config.get("address_prefix") or "").strip()
+    def _create_email_mail_tm_like(self, provider: str, runtime_config: Dict[str, Any]) -> Dict[str, Any]:
+        preferred_domain = self._normalize_domain(runtime_config.get("preferred_domain"))
+        address_prefix = str(runtime_config.get("address_prefix") or "").strip()
 
-        domain = self._resolve_mail_tm_domain(base_url, preferred_domain)
+        domain = self._resolve_mail_tm_domain(runtime_config, preferred_domain)
         password = self._generate_secret(16)
+        create_url = self._resolve_endpoint_url(runtime_config, "create_path", "/accounts")
+        token_url = self._resolve_endpoint_url(runtime_config, "token_path", "/token")
 
         create_error = ""
         for _ in range(6):
@@ -248,16 +278,22 @@ class TempmailService(BaseEmailService):
             address = f"{local_part}@{domain}"
 
             response = self.http_client.post(
-                f"{base_url}/accounts",
-                headers={"Accept": "application/json", "Content-Type": "application/json"},
+                create_url,
                 json={"address": address, "password": password},
+                **self._build_request_kwargs(
+                    runtime_config,
+                    headers={"Accept": "application/json", "Content-Type": "application/json"},
+                ),
             )
 
             if response.status_code in (200, 201):
                 token_response = self.http_client.post(
-                    f"{base_url}/token",
-                    headers={"Accept": "application/json", "Content-Type": "application/json"},
+                    token_url,
                     json={"address": address, "password": password},
+                    **self._build_request_kwargs(
+                        runtime_config,
+                        headers={"Accept": "application/json", "Content-Type": "application/json"},
+                    ),
                 )
                 if token_response.status_code != 200:
                     raise EmailServiceError(
@@ -290,19 +326,46 @@ class TempmailService(BaseEmailService):
 
         raise EmailServiceError(create_error or f"{provider} 创建邮箱失败")
 
-    def _create_email_onesecmail(self) -> Dict[str, Any]:
-        response = self.http_client.get(
-            self._base_url,
-            params={"action": "genRandomMailbox", "count": 1},
-            headers={"Accept": "application/json"},
-        )
-        if response.status_code != 200:
-            raise EmailServiceError(f"1secmail 创建邮箱失败，状态码: {response.status_code}")
+    def _create_email_onesecmail(self, runtime_config: Dict[str, Any]) -> Dict[str, Any]:
+        base_url = str(runtime_config.get("base_url") or self._base_url).strip().rstrip("/")
+        address_prefix = str(runtime_config.get("address_prefix") or "").strip()
+        preferred_domain = self._normalize_domain(runtime_config.get("preferred_domain"))
 
-        data = response.json()
-        email = ""
-        if isinstance(data, list) and data:
-            email = str(data[0] or "").strip()
+        random_mailbox_email = ""
+        random_mailbox_status: Optional[int] = None
+        create_method = str(runtime_config.get("create_method") or "").strip().lower()
+        local_fallback_only = create_method in {"local", "local_only", "synthesized"}
+
+        if not local_fallback_only:
+            random_resp = self.http_client.get(
+                base_url,
+                **self._build_request_kwargs(
+                    runtime_config,
+                    headers={"Accept": "application/json"},
+                    params={"action": "genRandomMailbox", "count": 1},
+                ),
+            )
+            random_mailbox_status = int(random_resp.status_code)
+
+            if random_resp.status_code == 200:
+                random_mailbox_email = self._extract_first_email(random_resp.json())
+            elif random_resp.status_code not in {401, 403, 405, 429}:
+                raise EmailServiceError(f"1secmail 创建邮箱失败，状态码: {random_resp.status_code}")
+
+        email = random_mailbox_email
+        if "@" not in email:
+            domain = self._resolve_onesecmail_domain(runtime_config, preferred_domain)
+            if not domain:
+                if random_mailbox_status is not None:
+                    raise EmailServiceError(f"1secmail 创建邮箱失败，状态码: {random_mailbox_status}")
+                raise EmailServiceError("1secmail 可用邮箱域名为空")
+
+            local_part = self._generate_local_part(prefix=address_prefix)
+            email = f"{local_part}@{domain}"
+            logger.warning(
+                "1secmail genRandomMailbox 不可用，已切换本地地址合成(domain=%s)",
+                domain,
+            )
 
         if "@" not in email:
             raise EmailServiceError("1secmail 返回邮箱地址无效")
@@ -318,14 +381,17 @@ class TempmailService(BaseEmailService):
             "created_at": time.time(),
         }
 
-    def _create_email_guerrillamail(self, config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        base_url = self._base_url
-        address_prefix = str((config or {}).get("address_prefix") or self.config.get("address_prefix") or "").strip()
+    def _create_email_guerrillamail(self, runtime_config: Dict[str, Any]) -> Dict[str, Any]:
+        base_url = str(runtime_config.get("base_url") or self._base_url).strip().rstrip("/")
+        address_prefix = str(runtime_config.get("address_prefix") or "").strip()
 
         response = self.http_client.get(
             base_url,
-            params={"f": "get_email_address", "agent": "Codex-keygen"},
-            headers={"Accept": "application/json"},
+            **self._build_request_kwargs(
+                runtime_config,
+                headers={"Accept": "application/json"},
+                params={"f": "get_email_address", "agent": "Codex-keygen"},
+            ),
         )
         if response.status_code != 200:
             raise EmailServiceError(f"GuerrillaMail 创建会话失败，状态码: {response.status_code}")
@@ -337,13 +403,16 @@ class TempmailService(BaseEmailService):
         if address_prefix and sid_token:
             set_user_resp = self.http_client.get(
                 base_url,
-                params={
-                    "f": "set_email_user",
-                    "email_user": address_prefix,
-                    "sid_token": sid_token,
-                    "agent": "Codex-keygen",
-                },
-                headers={"Accept": "application/json"},
+                **self._build_request_kwargs(
+                    runtime_config,
+                    headers={"Accept": "application/json"},
+                    params={
+                        "f": "set_email_user",
+                        "email_user": address_prefix,
+                        "sid_token": sid_token,
+                        "agent": "Codex-keygen",
+                    },
+                ),
             )
             if set_user_resp.status_code == 200:
                 set_data = set_user_resp.json() if set_user_resp.text else {}
@@ -423,15 +492,22 @@ class TempmailService(BaseEmailService):
         timeout: int,
         pattern: str,
         otp_sent_at: Optional[float],
+        runtime_config: Dict[str, Any],
     ) -> Optional[str]:
-        base_url = self._base_url
-        headers = {"Accept": "application/json", "Authorization": f"Bearer {token}"}
+        messages_url = self._resolve_endpoint_url(runtime_config, "messages_path", "/messages")
         start_time = time.time()
         seen_ids: Set[str] = set()
 
         while time.time() - start_time < timeout:
             try:
-                response = self.http_client.get(f"{base_url}/messages", headers=headers)
+                response = self.http_client.get(
+                    messages_url,
+                    **self._build_request_kwargs(
+                        runtime_config,
+                        headers={"Accept": "application/json"},
+                        bearer_token=token,
+                    ),
+                )
                 if response.status_code != 200:
                     time.sleep(self._POLL_INTERVAL)
                     continue
@@ -444,7 +520,14 @@ class TempmailService(BaseEmailService):
                         continue
                     seen_ids.add(msg_id)
 
-                    detail_resp = self.http_client.get(f"{base_url}/messages/{msg_id}", headers=headers)
+                    detail_resp = self.http_client.get(
+                        f"{messages_url.rstrip('/')}/{msg_id}",
+                        **self._build_request_kwargs(
+                            runtime_config,
+                            headers={"Accept": "application/json"},
+                            bearer_token=token,
+                        ),
+                    )
                     if detail_resp.status_code != 200:
                         continue
 
@@ -470,8 +553,16 @@ class TempmailService(BaseEmailService):
 
         return None
 
-    def _poll_onesecmail(self, email: str, login: str, domain: str, timeout: int, pattern: str) -> Optional[str]:
-        base_url = self._base_url
+    def _poll_onesecmail(
+        self,
+        email: str,
+        login: str,
+        domain: str,
+        timeout: int,
+        pattern: str,
+        runtime_config: Dict[str, Any],
+    ) -> Optional[str]:
+        base_url = str(runtime_config.get("base_url") or self._base_url).strip().rstrip("/")
         start_time = time.time()
         seen_ids: Set[str] = set()
 
@@ -479,8 +570,11 @@ class TempmailService(BaseEmailService):
             try:
                 response = self.http_client.get(
                     base_url,
-                    params={"action": "getMessages", "login": login, "domain": domain},
-                    headers={"Accept": "application/json"},
+                    **self._build_request_kwargs(
+                        runtime_config,
+                        headers={"Accept": "application/json"},
+                        params={"action": "getMessages", "login": login, "domain": domain},
+                    ),
                 )
                 if response.status_code != 200:
                     time.sleep(self._POLL_INTERVAL)
@@ -501,13 +595,16 @@ class TempmailService(BaseEmailService):
 
                     detail_resp = self.http_client.get(
                         base_url,
-                        params={
-                            "action": "readMessage",
-                            "login": login,
-                            "domain": domain,
-                            "id": msg_id,
-                        },
-                        headers={"Accept": "application/json"},
+                        **self._build_request_kwargs(
+                            runtime_config,
+                            headers={"Accept": "application/json"},
+                            params={
+                                "action": "readMessage",
+                                "login": login,
+                                "domain": domain,
+                                "id": msg_id,
+                            },
+                        ),
                     )
                     if detail_resp.status_code != 200:
                         continue
@@ -531,8 +628,15 @@ class TempmailService(BaseEmailService):
 
         return None
 
-    def _poll_guerrillamail(self, email: str, sid_token: str, timeout: int, pattern: str) -> Optional[str]:
-        base_url = self._base_url
+    def _poll_guerrillamail(
+        self,
+        email: str,
+        sid_token: str,
+        timeout: int,
+        pattern: str,
+        runtime_config: Dict[str, Any],
+    ) -> Optional[str]:
+        base_url = str(runtime_config.get("base_url") or self._base_url).strip().rstrip("/")
         start_time = time.time()
         seen_ids: Set[str] = set()
 
@@ -540,8 +644,11 @@ class TempmailService(BaseEmailService):
             try:
                 response = self.http_client.get(
                     base_url,
-                    params={"f": "get_email_list", "sid_token": sid_token, "offset": 0},
-                    headers={"Accept": "application/json"},
+                    **self._build_request_kwargs(
+                        runtime_config,
+                        headers={"Accept": "application/json"},
+                        params={"f": "get_email_list", "sid_token": sid_token, "offset": 0},
+                    ),
                 )
                 if response.status_code != 200:
                     time.sleep(self._POLL_INTERVAL)
@@ -563,8 +670,11 @@ class TempmailService(BaseEmailService):
 
                     detail_resp = self.http_client.get(
                         base_url,
-                        params={"f": "fetch_email", "sid_token": sid_token, "email_id": msg_id},
-                        headers={"Accept": "application/json"},
+                        **self._build_request_kwargs(
+                            runtime_config,
+                            headers={"Accept": "application/json"},
+                            params={"f": "fetch_email", "sid_token": sid_token, "email_id": msg_id},
+                        ),
                     )
                     if detail_resp.status_code != 200:
                         continue
@@ -588,30 +698,260 @@ class TempmailService(BaseEmailService):
 
         return None
 
-    def _resolve_mail_tm_domain(self, base_url: str, preferred_domain: str) -> str:
-        response = self.http_client.get(f"{base_url}/domains", headers={"Accept": "application/json"})
+    def _resolve_mail_tm_domain(self, runtime_config: Dict[str, Any], preferred_domain: str) -> str:
+        domains_url = self._resolve_endpoint_url(runtime_config, "domains_path", "/domains")
+        response = self.http_client.get(
+            domains_url,
+            **self._build_request_kwargs(runtime_config, headers={"Accept": "application/json"}),
+        )
         if response.status_code != 200:
             raise EmailServiceError(f"获取邮箱域名失败，状态码: {response.status_code}")
 
         data = response.json()
-        domains: List[str] = []
-        if isinstance(data, dict):
-            members = data.get("hydra:member") or data.get("domains") or []
-            if isinstance(members, list):
-                for item in members:
-                    if not isinstance(item, dict):
-                        continue
-                    if item.get("isActive") is False:
-                        continue
-                    domain = str(item.get("domain") or "").strip()
-                    if domain:
-                        domains.append(domain)
+        domains = self._extract_domain_candidates(data)
 
         if preferred_domain and preferred_domain in domains:
             return preferred_domain
         if domains:
             return domains[0]
+
+        fallback_domain = self._normalize_domain(runtime_config.get("fallback_domain"))
+        if fallback_domain:
+            return fallback_domain
+
+        if preferred_domain:
+            return preferred_domain
+
+        base_domain = self._infer_domain_from_base_url(runtime_config.get("base_url"))
+        if base_domain:
+            return base_domain
+
         raise EmailServiceError("可用邮箱域名为空")
+
+    def _resolve_onesecmail_domain(self, runtime_config: Dict[str, Any], preferred_domain: str) -> str:
+        domains: List[str] = []
+        base_url = str(runtime_config.get("base_url") or self._base_url).strip().rstrip("/")
+
+        try:
+            domain_resp = self.http_client.get(
+                base_url,
+                **self._build_request_kwargs(
+                    runtime_config,
+                    headers={"Accept": "application/json"},
+                    params={"action": "getDomainList"},
+                ),
+            )
+            if domain_resp.status_code == 200:
+                domains = self._extract_domain_candidates(domain_resp.json())
+        except Exception as exc:
+            logger.debug("拉取 1secmail 域名列表失败: %s", exc)
+
+        if preferred_domain and preferred_domain in domains:
+            return preferred_domain
+        if domains:
+            return domains[0]
+
+        fallback_domain = self._normalize_domain(runtime_config.get("fallback_domain"))
+        if fallback_domain:
+            return fallback_domain
+
+        if preferred_domain:
+            return preferred_domain
+
+        for default_domain in ("1secmail.com", "1secmail.net", "1secmail.org"):
+            normalized = self._normalize_domain(default_domain)
+            if normalized:
+                return normalized
+
+        return ""
+
+    def _resolve_runtime_config(self, override: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        runtime_config = dict(self.config or {})
+        if override:
+            runtime_config.update(dict(override))
+
+        if "api_url" in runtime_config and "base_url" not in runtime_config:
+            runtime_config["base_url"] = runtime_config.get("api_url")
+
+        provider = normalize_tempmail_provider(runtime_config.get("provider"))
+        provider_meta = get_tempmail_provider_meta(provider)
+
+        base_url = str(runtime_config.get("base_url") or provider_meta.get("default_base_url") or "").strip()
+        runtime_config["provider"] = provider
+        runtime_config["base_url"] = base_url.rstrip("/")
+
+        return runtime_config
+
+    def _resolve_endpoint_url(self, runtime_config: Dict[str, Any], path_key: str, default_path: str) -> str:
+        base_url = str(runtime_config.get("base_url") or self._base_url).strip().rstrip("/")
+        path = str(runtime_config.get(path_key) or default_path or "").strip()
+        if path.startswith("http://") or path.startswith("https://"):
+            return path
+
+        if path and not path.startswith("/"):
+            path = f"/{path}"
+
+        return f"{base_url}{path}"
+
+    def _build_request_kwargs(
+        self,
+        runtime_config: Dict[str, Any],
+        *,
+        headers: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
+        bearer_token: Optional[str] = None,
+        timeout: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        merged_headers = dict(headers or {})
+        merged_params = dict(params or {})
+
+        api_key = str(runtime_config.get("api_key") or "").strip()
+        auth_style = str(runtime_config.get("auth_style") or "").strip().lower()
+        auth_placement = str(runtime_config.get("auth_placement") or "").strip().lower() or "header"
+        auth_header_name = str(
+            runtime_config.get("auth_header_name")
+            or runtime_config.get("api_key_header")
+            or "X-API-Key"
+        ).strip() or "X-API-Key"
+        auth_query_key = str(
+            runtime_config.get("auth_query_key")
+            or runtime_config.get("api_key_query_key")
+            or "api_key"
+        ).strip() or "api_key"
+        auth_scheme = str(runtime_config.get("auth_scheme") or "Bearer").strip() or "Bearer"
+
+        if api_key and not auth_style:
+            auth_style = "api_key"
+
+        if api_key and auth_style not in {"none", "disabled", "off"}:
+            if auth_style in {"bearer", "jwt"}:
+                auth_value = f"{auth_scheme} {api_key}"
+            else:
+                auth_value = api_key
+
+            if auth_placement == "query":
+                merged_params.setdefault(auth_query_key, auth_value)
+            else:
+                header_key = "Authorization" if auth_style in {"bearer", "jwt"} else auth_header_name
+                merged_headers.setdefault(header_key, auth_value)
+
+        if bearer_token:
+            merged_headers["Authorization"] = f"Bearer {bearer_token}"
+
+        kwargs: Dict[str, Any] = {}
+        if merged_headers:
+            kwargs["headers"] = merged_headers
+        if merged_params:
+            kwargs["params"] = merged_params
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+
+        return kwargs
+
+    @staticmethod
+    def _normalize_domain(raw: Any) -> str:
+        text = str(raw or "").strip().lower()
+        if not text:
+            return ""
+
+        if "@" in text:
+            text = text.split("@", 1)[1]
+
+        if text.startswith("http://"):
+            text = text[7:]
+        elif text.startswith("https://"):
+            text = text[8:]
+
+        text = text.split("/", 1)[0].split(":", 1)[0].strip(".")
+        if "." not in text:
+            return ""
+        if not re.fullmatch(r"[a-z0-9.-]+", text):
+            return ""
+        return text
+
+    @classmethod
+    def _extract_domain_candidates(cls, payload: Any) -> List[str]:
+        domains: List[str] = []
+        seen: Set[str] = set()
+
+        def _append(candidate: Any) -> None:
+            domain = cls._normalize_domain(candidate)
+            if domain and domain not in seen:
+                seen.add(domain)
+                domains.append(domain)
+
+        def _walk(node: Any) -> None:
+            if isinstance(node, str):
+                _append(node)
+                return
+
+            if isinstance(node, list):
+                for item in node:
+                    _walk(item)
+                return
+
+            if isinstance(node, dict):
+                active_flag = node.get("isActive")
+                if active_flag is False or str(active_flag).strip().lower() in {"false", "0", "no"}:
+                    return
+
+                for key in ("domain", "name", "value", "address"):
+                    if key in node:
+                        _append(node.get(key))
+
+                for key in ("hydra:member", "domains", "items", "results", "data", "list"):
+                    if key in node:
+                        _walk(node.get(key))
+
+                return
+
+        _walk(payload)
+        return domains
+
+    @classmethod
+    def _extract_first_email(cls, payload: Any) -> str:
+        if isinstance(payload, list):
+            for item in payload:
+                candidate = str(item or "").strip()
+                if "@" in candidate:
+                    return candidate
+            return ""
+
+        if isinstance(payload, dict):
+            for key in ("email", "address", "mailbox"):
+                candidate = str(payload.get(key) or "").strip()
+                if "@" in candidate:
+                    return candidate
+
+            for key in ("emails", "mailboxes", "data", "result"):
+                if key in payload:
+                    nested = cls._extract_first_email(payload.get(key))
+                    if nested:
+                        return nested
+
+        return ""
+
+    @staticmethod
+    def _infer_domain_from_base_url(base_url: Any) -> str:
+        text = str(base_url or "").strip().lower()
+        if not text:
+            return ""
+
+        if text.startswith("http://"):
+            text = text[7:]
+        elif text.startswith("https://"):
+            text = text[8:]
+
+        host = text.split("/", 1)[0].split(":", 1)[0].strip()
+        if host.startswith("api."):
+            host = host[4:]
+        if host.startswith("www."):
+            host = host[4:]
+
+        if "." not in host:
+            return ""
+
+        return host
 
     @staticmethod
     def _extract_mail_tm_messages(data: Any) -> List[Dict[str, Any]]:

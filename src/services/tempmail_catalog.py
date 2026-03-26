@@ -68,7 +68,26 @@ def build_tempmail_config(
         "max_retries": max_retries,
     }
 
-    for key in ("address_prefix", "preferred_domain", "api_key"):
+    optional_text_fields = (
+        "address_prefix",
+        "preferred_domain",
+        "fallback_domain",
+        "api_key",
+        "auth_style",
+        "auth_placement",
+        "auth_header_name",
+        "api_key_header",
+        "auth_query_key",
+        "api_key_query_key",
+        "auth_scheme",
+        "create_method",
+        "create_path",
+        "domains_path",
+        "inbox_path",
+        "messages_path",
+        "token_path",
+    )
+    for key in optional_text_fields:
         value = str(source.get(key) or "").strip()
         if value:
             config[key] = value
