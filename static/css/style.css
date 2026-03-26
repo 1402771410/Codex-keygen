@@ -342,6 +342,131 @@ body {
     background: var(--semi-color-bg-1);
 }
 
+/* ==================== 临时邮箱页专属重构 ==================== */
+
+.mailhub-page {
+    background:
+        radial-gradient(circle at 0% 0%, rgba(0, 119, 250, 0.14), transparent 45%),
+        radial-gradient(circle at 100% 100%, rgba(32, 128, 240, 0.12), transparent 45%),
+        var(--semi-color-bg-1);
+}
+
+.mailhub-page .sidebar {
+    backdrop-filter: blur(14px);
+    background: color-mix(in srgb, var(--semi-color-bg-0) 92%, transparent);
+    border-right: 1px solid color-mix(in srgb, var(--semi-color-primary) 18%, var(--semi-border-color-light));
+    box-shadow: 0 12px 40px rgba(0, 58, 128, 0.1);
+}
+
+.mailhub-page .sidebar-brand {
+    padding: var(--semi-spacing-6) var(--semi-spacing-5);
+    background: linear-gradient(135deg, #0b7bff 0%, #00a2ff 45%, #4b6bff 100%);
+}
+
+.mailhub-page .sidebar-brand-icon {
+    color: #ffffff;
+}
+
+.mailhub-page .brand-emblem {
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    background: rgba(255, 255, 255, 0.16);
+}
+
+.mailhub-page .sidebar-brand-icon svg,
+.mailhub-page .nav-glyph svg,
+.mailhub-page .page-title-icon svg,
+.mailhub-page .card-title-icon svg,
+.mailhub-page .btn-icon svg,
+.mailhub-page .theme-toggle-btn svg,
+.mailhub-page .empty-state-icon svg {
+    width: 1em;
+    height: 1em;
+}
+
+.mailhub-page .nav-glyph {
+    width: 20px;
+    height: 20px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.mailhub-page .sidebar-link {
+    border: 1px solid transparent;
+}
+
+.mailhub-page .sidebar-link.active {
+    background: linear-gradient(120deg, rgba(0, 119, 250, 0.12), rgba(0, 119, 250, 0.04));
+    border-color: rgba(0, 119, 250, 0.16);
+}
+
+.mailhub-page .page-header-bar {
+    margin: var(--semi-spacing-5) var(--semi-spacing-6) 0;
+    border-radius: 16px;
+    border: 1px solid color-mix(in srgb, var(--semi-color-primary) 14%, var(--semi-border-color-light));
+    box-shadow: 0 14px 34px rgba(0, 52, 112, 0.08);
+}
+
+.mailhub-page .page-title-section h1 {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--semi-spacing-3);
+}
+
+.mailhub-page .page-title-icon {
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--semi-color-primary);
+    background: color-mix(in srgb, var(--semi-color-primary) 13%, transparent);
+}
+
+.mailhub-page .page-content {
+    padding-top: var(--semi-spacing-4);
+}
+
+.mailhub-page .stats-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.mailhub-page .card {
+    border-radius: 14px;
+    border-color: color-mix(in srgb, var(--semi-color-primary) 10%, var(--semi-border-color-light));
+    box-shadow: 0 10px 30px rgba(15, 71, 140, 0.08);
+}
+
+.mailhub-page .card-header {
+    padding-top: var(--semi-spacing-5);
+    padding-bottom: var(--semi-spacing-5);
+}
+
+.mailhub-page .card-header h3 {
+    gap: var(--semi-spacing-3);
+}
+
+.mailhub-page .card-title-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    color: var(--semi-color-primary);
+    background: color-mix(in srgb, var(--semi-color-primary) 11%, transparent);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.mailhub-page .theme-toggle-btn {
+    color: var(--semi-color-text-1);
+}
+
+.mailhub-page .theme-toggle-btn svg {
+    width: 16px;
+    height: 16px;
+}
+
 /* 页面标题 (旧兼容) */
 .page-header {
     margin-bottom: var(--semi-spacing-5);
@@ -476,6 +601,90 @@ body {
 }
 
 /* ==================== 按钮 ==================== */
+
+.semi-action-btn {
+    --btn-bg: var(--semi-color-bg-0);
+    --btn-border: var(--semi-border-color);
+    --btn-color: var(--semi-color-text-0);
+    --btn-shadow: 0 6px 16px rgba(17, 58, 110, 0.08);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--semi-spacing-2);
+    height: 36px;
+    padding: 0 14px;
+    font-size: 0.8571rem;
+    font-weight: 600;
+    border-radius: 10px;
+    border: 1px solid var(--btn-border);
+    background: var(--btn-bg);
+    color: var(--btn-color);
+    box-shadow: var(--btn-shadow);
+    cursor: pointer;
+    transition: transform var(--semi-motion-duration-fast) var(--semi-motion-ease-out),
+        box-shadow var(--semi-motion-duration-fast) var(--semi-motion-ease-out),
+        background var(--semi-motion-duration-fast) var(--semi-motion-ease-out),
+        border-color var(--semi-motion-duration-fast) var(--semi-motion-ease-out);
+}
+
+.semi-action-btn:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 10px 20px rgba(17, 58, 110, 0.13);
+}
+
+.semi-action-btn:active:not(:disabled) {
+    transform: translateY(0);
+}
+
+.semi-action-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+    box-shadow: none;
+}
+
+.semi-action-btn .btn-icon {
+    width: 14px;
+    height: 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.semi-action-btn.primary {
+    --btn-bg: linear-gradient(120deg, #0d79ff 0%, #2f8dff 100%);
+    --btn-border: rgba(13, 121, 255, 0.2);
+    --btn-color: #ffffff;
+    --btn-shadow: 0 10px 24px rgba(13, 121, 255, 0.24);
+}
+
+.semi-action-btn.neutral {
+    --btn-bg: var(--semi-color-bg-0);
+    --btn-border: color-mix(in srgb, var(--semi-color-primary) 16%, var(--semi-border-color));
+    --btn-color: var(--semi-color-text-0);
+}
+
+.semi-action-btn.danger {
+    --btn-bg: linear-gradient(135deg, #ff5d5d 0%, #ff3b30 100%);
+    --btn-border: rgba(255, 59, 48, 0.28);
+    --btn-color: #ffffff;
+    --btn-shadow: 0 10px 24px rgba(255, 59, 48, 0.22);
+}
+
+.semi-action-btn.ghost {
+    --btn-bg: transparent;
+    --btn-border: var(--semi-border-color);
+    --btn-color: var(--semi-color-text-1);
+    --btn-shadow: none;
+}
+
+.semi-action-btn.mini {
+    height: 30px;
+    border-radius: 8px;
+    font-size: 0.7857rem;
+    padding: 0 10px;
+    font-weight: 600;
+    box-shadow: none;
+}
 
 .btn {
     display: inline-flex;
@@ -658,6 +867,77 @@ body {
 .data-table tbody tr:hover { background: var(--semi-color-bg-1); }
 .data-table input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--semi-color-primary); cursor: pointer; }
 
+.mailhub-page .data-table thead th {
+    background: linear-gradient(180deg, color-mix(in srgb, var(--semi-color-primary) 8%, var(--semi-color-bg-2)), var(--semi-color-bg-2));
+    color: var(--semi-color-text-1);
+    text-transform: none;
+    letter-spacing: 0;
+}
+
+.mailhub-page .rule-name-cell {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--semi-spacing-2);
+    font-weight: 600;
+}
+
+.mailhub-page .mailhub-fixed-tag {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 22px;
+    padding: 0 9px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 152, 0, 0.22);
+    background: rgba(255, 152, 0, 0.13);
+    color: #a46300;
+    font-size: 0.7143rem;
+    font-weight: 600;
+}
+
+.mailhub-page .provider-text {
+    font-weight: 600;
+    color: var(--semi-color-text-0);
+}
+
+.mailhub-page .provider-meta {
+    margin-top: 2px;
+    font-size: 0.7143rem;
+    color: var(--semi-color-text-2);
+}
+
+.mailhub-page .rule-action-group {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.mailhub-page .test-result-text {
+    display: inline-block;
+    font-size: 0.7857rem;
+    line-height: 1.4;
+    color: var(--semi-color-text-2);
+}
+
+.mailhub-page .test-result-text.success {
+    color: var(--semi-color-success);
+}
+
+.mailhub-page .test-result-text.error {
+    color: var(--semi-color-danger);
+}
+
+.mailhub-page .test-result-text.muted {
+    color: var(--semi-color-text-3);
+}
+
+.mailhub-page .form-hint {
+    margin-top: var(--semi-spacing-1);
+    font-size: 0.7857rem;
+    color: var(--semi-color-text-2);
+}
+
 /* ==================== 工具栏 ==================== */
 
 .toolbar {
@@ -780,6 +1060,58 @@ body {
     padding: var(--semi-spacing-5);
     overflow-y: auto;
     max-height: calc(85vh - 120px);
+}
+
+.mailhub-page .modal-content {
+    border: 1px solid color-mix(in srgb, var(--semi-color-primary) 15%, var(--semi-border-color-light));
+    box-shadow: 0 24px 40px rgba(12, 46, 91, 0.2);
+}
+
+.mailhub-page .modal-header {
+    background: linear-gradient(180deg, color-mix(in srgb, var(--semi-color-primary) 10%, var(--semi-color-bg-0)), var(--semi-color-bg-0));
+}
+
+.test-progress-modal {
+    z-index: 1300;
+}
+
+.test-progress-content {
+    max-width: 420px;
+    border-radius: 16px;
+}
+
+.test-progress-body {
+    padding: 38px 34px;
+    text-align: center;
+}
+
+.test-progress-body h3 {
+    font-size: 1.1429rem;
+    line-height: 1.4;
+    margin-bottom: var(--semi-spacing-2);
+    color: var(--semi-color-text-0);
+}
+
+.test-progress-body p {
+    font-size: 0.8571rem;
+    color: var(--semi-color-text-2);
+    line-height: 1.55;
+}
+
+.test-spinner {
+    width: 52px;
+    height: 52px;
+    margin: 0 auto var(--semi-spacing-5);
+    border-radius: 50%;
+    border: 4px solid color-mix(in srgb, var(--semi-color-primary) 18%, transparent);
+    border-top-color: var(--semi-color-primary);
+    animation: mailhub-spin 0.9s linear infinite;
+}
+
+@keyframes mailhub-spin {
+    to {
+        transform: rotate(360deg);
+    }
 }
 
 /* ==================== 下拉菜单 ==================== */
@@ -930,6 +1262,7 @@ body {
 }
 
 .empty-state-icon { font-size: 2.5rem; margin-bottom: var(--semi-spacing-3); opacity: 0.5; }
+.empty-state-icon svg { width: 40px; height: 40px; }
 .empty-state-title { font-size: 1rem; font-weight: 500; color: var(--semi-color-text-0); margin-bottom: var(--semi-spacing-1); }
 .empty-state-description { font-size: 0.8571rem; max-width: 280px; text-align: center; }
 
@@ -1097,6 +1430,8 @@ body {
     .stat-card { flex-direction: row; justify-content: space-between; }
     .stat-value { font-size: 1.2857rem; }
     .btn { width: 100%; }
+    .mailhub-page .semi-action-btn { width: 100%; }
+    .mailhub-page .rule-action-group { flex-direction: column; align-items: stretch; }
     .form-actions { flex-direction: column; }
 }
 
