@@ -13,7 +13,13 @@ from ...config.settings import get_settings, update_settings
 from ...database import crud
 from ...database.models import EmailService as EmailServiceModel
 from ...database.session import get_db
-from ...database.tempmail_bootstrap import ensure_builtin_tempmail_services, sync_global_tempmail_service
+from ...database.tempmail_bootstrap import (
+    ensure_builtin_tempmail_services,
+    get_global_tempmail_service,
+    get_tempmail_runtime_state,
+    update_tempmail_runtime_state,
+)
+from ...services.tempmail_catalog import build_tempmail_config
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -71,10 +77,41 @@ class AllSettings(BaseModel):
 
 # ============== API Endpoints ==============
 
+def _load_tempmail_runtime_payload(settings) -> dict:
+    """从邮箱服务记录加载临时邮箱运行时配置。"""
+    payload = {
+        "base_url": settings.tempmail_base_url,
+        "timeout": settings.tempmail_timeout,
+        "max_retries": settings.tempmail_max_retries,
+        "enabled": settings.tempmail_enabled,
+        "selection_mode": settings.tempmail_selection_mode,
+        "single_service_id": settings.tempmail_single_service_id,
+    }
+
+    with get_db() as db:
+        ensure_builtin_tempmail_services(db, settings)
+        runtime_state = get_tempmail_runtime_state(db, settings)
+        global_service = get_global_tempmail_service(db, settings, ensure_exists=True)
+        global_config = dict(global_service.config or {}) if global_service else {}
+
+    payload.update(
+        {
+            "base_url": str(global_config.get("base_url") or payload["base_url"] or "").strip(),
+            "timeout": int(global_config.get("timeout") or payload["timeout"] or 30),
+            "max_retries": int(global_config.get("max_retries") or payload["max_retries"] or 3),
+            "enabled": bool(runtime_state.get("global_enabled")),
+            "selection_mode": str(runtime_state.get("selection_mode") or "single"),
+            "single_service_id": runtime_state.get("single_service_id"),
+        }
+    )
+    return payload
+
+
 @router.get("")
 async def get_all_settings():
     """获取所有设置"""
     settings = get_settings()
+    tempmail_payload = _load_tempmail_runtime_payload(settings)
 
     return {
         "proxy": {
@@ -104,14 +141,7 @@ async def get_all_settings():
             "access_username": settings.webui_access_username,
             "has_access_password": bool(settings.webui_access_password and settings.webui_access_password.get_secret_value()),
         },
-        "tempmail": {
-            "base_url": settings.tempmail_base_url,
-            "timeout": settings.tempmail_timeout,
-            "max_retries": settings.tempmail_max_retries,
-            "enabled": settings.tempmail_enabled,
-            "selection_mode": settings.tempmail_selection_mode,
-            "single_service_id": settings.tempmail_single_service_id,
-        },
+        "tempmail": tempmail_payload,
         "email_code": {
             "timeout": settings.email_code_timeout,
             "poll_interval": settings.email_code_poll_interval,
@@ -408,69 +438,83 @@ class EmailCodeSettings(BaseModel):
 async def get_tempmail_settings():
     """获取临时邮箱设置"""
     settings = get_settings()
-
-    return {
-        "base_url": settings.tempmail_base_url,
-        "timeout": settings.tempmail_timeout,
-        "max_retries": settings.tempmail_max_retries,
-        "enabled": settings.tempmail_enabled,
-        "selection_mode": settings.tempmail_selection_mode,
-        "single_service_id": settings.tempmail_single_service_id,
-    }
+    return _load_tempmail_runtime_payload(settings)
 
 
 @router.post("/tempmail")
 async def update_tempmail_settings(request: TempmailSettings):
     """更新临时邮箱设置"""
     current_settings = get_settings()
-    update_dict = {}
-
     base_url = request.base_url or request.api_url
-    if base_url:
-        update_dict["tempmail_base_url"] = base_url
-
-    if request.enabled is not None:
-        update_dict["tempmail_enabled"] = request.enabled
 
     mode = (request.mode or request.selection_mode or "").strip().lower()
     if mode:
         if mode not in ("single", "multi"):
             raise HTTPException(status_code=400, detail="selection_mode 必须为 single 或 multi")
-        update_dict["tempmail_selection_mode"] = mode
 
     # 允许前端显式传 null 来清空 single_service_id。
+    single_service_id: Optional[int] = None
+    has_single_service_update = "single_service_id" in request.model_fields_set
+
     if "single_service_id" in request.model_fields_set:
         raw_single_service_id = request.single_service_id
         if raw_single_service_id is None:
-            single_service_id: Optional[int] = None
+            single_service_id = None
         else:
             single_service_id = int(raw_single_service_id)
             if single_service_id <= 0:
                 single_service_id = None
 
-        if single_service_id is not None:
-            with get_db() as db:
-                ensure_builtin_tempmail_services(db, current_settings)
-                service = db.query(EmailServiceModel).filter(
-                    EmailServiceModel.id == single_service_id,
-                    EmailServiceModel.service_type == "tempmail",
-                    EmailServiceModel.enabled == True,
-                ).first()
-                if not service:
-                    raise HTTPException(status_code=400, detail="single_service_id 对应服务不存在或未启用")
-
-        update_dict["tempmail_single_service_id"] = single_service_id
-
-    updated_settings = update_settings(**update_dict) if update_dict else current_settings
-
     with get_db() as db:
-        ensure_builtin_tempmail_services(db, updated_settings)
-        sync_global_tempmail_service(
-            db,
-            updated_settings,
-            base_url=update_dict.get("tempmail_base_url"),
-            enabled=update_dict.get("tempmail_enabled"),
-        )
+        ensure_builtin_tempmail_services(db, current_settings)
+
+        if has_single_service_update and single_service_id is not None:
+            service = db.query(EmailServiceModel).filter(
+                EmailServiceModel.id == single_service_id,
+                EmailServiceModel.service_type == "tempmail",
+                EmailServiceModel.enabled == True,
+            ).first()
+            if not service:
+                raise HTTPException(status_code=400, detail="single_service_id 对应服务不存在或未启用")
+
+        global_service = get_global_tempmail_service(db, current_settings, ensure_exists=True)
+        if global_service is None:
+            raise HTTPException(status_code=500, detail="全局临时邮箱服务初始化失败")
+
+        if base_url:
+            global_config = dict(global_service.config or {})
+            global_config["provider"] = str(global_service.provider or global_config.get("provider") or "tempmail_lol")
+            global_config["base_url"] = str(base_url).strip()
+            global_service.config = build_tempmail_config(
+                global_config,
+                current_settings,
+                provider_hint=global_service.provider,
+            )
+            db.commit()
+
+        runtime_updates = {}
+        if request.enabled is not None:
+            runtime_updates["global_enabled"] = request.enabled
+        if mode:
+            runtime_updates["selection_mode"] = mode
+        if has_single_service_update:
+            runtime_updates["single_service_id"] = single_service_id
+
+        if runtime_updates:
+            runtime_state = update_tempmail_runtime_state(db, current_settings, **runtime_updates)
+        else:
+            runtime_state = get_tempmail_runtime_state(db, current_settings)
+
+        refreshed_global_service = get_global_tempmail_service(db, current_settings, ensure_exists=True)
+        refreshed_global_config = dict(refreshed_global_service.config or {}) if refreshed_global_service else {}
+
+    # 保持旧设置键同步（兼容历史读取路径），但运行时不再依赖它们。
+    update_settings(
+        tempmail_base_url=str(refreshed_global_config.get("base_url") or base_url or current_settings.tempmail_base_url),
+        tempmail_enabled=bool(runtime_state["global_enabled"]),
+        tempmail_selection_mode=str(runtime_state["selection_mode"]),
+        tempmail_single_service_id=runtime_state["single_service_id"],
+    )
 
     return {"success": True, "message": "临时邮箱设置已更新"}
 

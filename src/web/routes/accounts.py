@@ -25,6 +25,7 @@ from ...core.dynamic_proxy import get_proxy_url_for_task
 from ...database import crud
 from ...database.models import Account
 from ...database.session import get_db
+from ...database.tempmail_bootstrap import ensure_builtin_tempmail_services, get_tempmail_runtime_state
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -1079,31 +1080,54 @@ def _build_inbox_config(db, service_type, email_service_id: Optional[str]) -> Op
         return None
 
     settings = get_settings()
-    config: dict = {
-        "base_url": settings.tempmail_base_url,
-        "timeout": settings.tempmail_timeout,
-        "max_retries": settings.tempmail_max_retries,
-    }
+    ensure_builtin_tempmail_services(db, settings)
+    runtime_state = get_tempmail_runtime_state(db, settings)
 
-    # 优先尝试使用账号记录的临时邮箱规则配置，以保证与注册时一致。
+    def _build_service_config(svc: Optional[EmailServiceModel]) -> Optional[dict]:
+        if not svc or not svc.config:
+            return None
+
+        service_config = dict(svc.config)
+        if "api_url" in service_config and "base_url" not in service_config:
+            service_config["base_url"] = service_config.pop("api_url")
+
+        provider = str(svc.provider or service_config.get("provider") or "tempmail_lol")
+        service_config["provider"] = provider
+        service_config.setdefault("timeout", int(settings.tempmail_timeout or 30))
+        service_config.setdefault("max_retries", int(settings.tempmail_max_retries or 3))
+        return service_config
+
+    candidate_ids: List[int] = []
     if email_service_id:
         try:
-            service_id = int(email_service_id)
+            candidate_ids.append(int(email_service_id))
         except (TypeError, ValueError):
-            service_id = None
+            pass
 
-        if service_id is not None:
-            svc = db.query(EmailServiceModel).filter(
-                EmailServiceModel.id == service_id,
-                EmailServiceModel.service_type == EST.TEMPMAIL.value,
-            ).first()
-            if svc and svc.config:
-                service_config = dict(svc.config)
-                if "api_url" in service_config and "base_url" not in service_config:
-                    service_config["base_url"] = service_config.pop("api_url")
-                config.update(service_config)
+    single_service_id = runtime_state.get("single_service_id")
+    global_service_id = runtime_state.get("global_service_id")
+    if isinstance(single_service_id, int) and single_service_id > 0:
+        candidate_ids.append(single_service_id)
+    if isinstance(global_service_id, int) and global_service_id > 0:
+        candidate_ids.append(global_service_id)
 
-    return config
+    for service_id in dict.fromkeys(candidate_ids):
+        svc = db.query(EmailServiceModel).filter(
+            EmailServiceModel.id == service_id,
+            EmailServiceModel.service_type == EST.TEMPMAIL.value,
+        ).first()
+        config = _build_service_config(svc)
+        if config:
+            return config
+
+    fallback_service = db.query(EmailServiceModel).filter(
+        EmailServiceModel.service_type == EST.TEMPMAIL.value,
+        EmailServiceModel.enabled == True,
+    ).order_by(
+        EmailServiceModel.priority.asc(),
+        EmailServiceModel.id.asc(),
+    ).first()
+    return _build_service_config(fallback_service)
 
 
 @router.post("/{account_id}/inbox-code")
