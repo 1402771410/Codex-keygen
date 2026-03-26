@@ -87,17 +87,39 @@ pip install -r requirements.txt
 
 > 如果你是首次部署，直接执行下面一条命令即可完成「拉取仓库 + 进入目录 + 启动安装流程」。
 
+> 仓库地址：`https://github.com/1402771410/Codex-keygen.git`
+
+#### 若仓库为私有（推荐，免反复输账号）
+
+##### Windows（PowerShell / CMD）
+
+```powershell
+gh auth login && gh repo clone 1402771410/Codex-keygen && cd Codex-keygen && .\keygen.bat install
+```
+
+##### macOS / Linux（Bash）
+
+```bash
+gh auth login && gh repo clone 1402771410/Codex-keygen && cd Codex-keygen && chmod +x keygen && ./keygen install
+```
+
+#### 若仓库为公开（可直接 clone）
+
 #### Windows（PowerShell / CMD）
 
 ```powershell
-git clone https://github.com/1402771410/Codex-Manager.git Codex-keygen && cd Codex-keygen && .\keygen.bat install
+git clone https://github.com/1402771410/Codex-keygen.git Codex-keygen && cd Codex-keygen && .\keygen.bat install
 ```
 
 #### macOS / Linux（Bash）
 
 ```bash
-git clone https://github.com/1402771410/Codex-Manager.git Codex-keygen && cd Codex-keygen && chmod +x keygen && ./keygen install
+git clone https://github.com/1402771410/Codex-keygen.git Codex-keygen && cd Codex-keygen && chmod +x keygen && ./keygen install
 ```
+
+> 如果 `git clone` 提示 `Username for 'https://github.com':`，说明当前走的是 HTTPS 鉴权：
+> - Username 输入你的 GitHub 用户名（如 `1402771410`）
+> - Password 位置输入 GitHub PAT（不是网页登录密码）
 
 ### 一步到位升级命令（拉取更新 + 升级）
 
