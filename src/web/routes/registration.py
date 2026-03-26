@@ -6,6 +6,7 @@ import asyncio
 import logging
 import uuid
 import random
+from threading import Lock
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Tuple, Any, Coroutine, Set, cast
 
@@ -31,6 +32,8 @@ running_tasks: dict = {}
 batch_tasks: Dict[str, dict] = {}
 # 与请求生命周期解耦的后台任务引用，避免任务被 GC 或随连接断开中断。
 _detached_background_tasks: Set[asyncio.Task[Any]] = set()
+# 临时邮箱服务选择锁，确保并发时的轮询选择具备一致性。
+_tempmail_selection_lock = Lock()
 
 
 def _spawn_detached_coroutine(coro: Coroutine[Any, Any, Any]) -> asyncio.Task[Any]:
@@ -293,7 +296,7 @@ def _select_tempmail_service(db, settings, explicit_service_id: Optional[int]):
             selected = base_query.filter(EmailServiceModel.id == single_service_id).first()
             if selected:
                 return selected
-            logger.warning("single 模式指定服务不可用，回退到首个启用服务: %s", single_service_id)
+            raise ValueError(f"single 模式指定服务不存在或已禁用: {single_service_id}")
 
         return base_query.order_by(EmailServiceModel.priority.asc(), EmailServiceModel.id.asc()).first()
 
@@ -304,6 +307,17 @@ def _select_tempmail_service(db, settings, explicit_service_id: Optional[int]):
         EmailServiceModel.priority.asc(),
         EmailServiceModel.id.asc(),
     ).first()
+
+
+def _select_and_mark_tempmail_service(db, settings, explicit_service_id: Optional[int]):
+    """在锁内完成服务选择与最近使用时间更新，避免并发下重复分配。"""
+    with _tempmail_selection_lock:
+        selected_service = _select_tempmail_service(db, settings, explicit_service_id)
+        if selected_service:
+            selected_service.last_used = datetime.utcnow()
+            db.commit()
+            db.refresh(selected_service)
+        return selected_service
 
 
 def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: Optional[str], email_service_config: Optional[dict], email_service_id: Optional[int] = None, log_prefix: str = "", batch_id: str = "", auto_upload_cpa: bool = False, cpa_service_ids: Optional[List[int]] = None, auto_upload_sub2api: bool = False, sub2api_service_ids: Optional[List[int]] = None, auto_upload_tm: bool = False, tm_service_ids: Optional[List[int]] = None):
@@ -357,7 +371,7 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                 raise ValueError("当前仅支持临时邮箱注册")
 
             settings = get_settings()
-            selected_service = _select_tempmail_service(db, settings, email_service_id)
+            selected_service = _select_and_mark_tempmail_service(db, settings, email_service_id)
 
             config = _normalize_email_service_config(
                 service_type,
@@ -376,8 +390,6 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                 provider = str(selected_service.provider or selected_config.get("provider") or "tempmail_lol")
                 selected_config["provider"] = provider
                 config.update(_normalize_email_service_config(service_type, selected_config, actual_proxy_url))
-                selected_service.last_used = datetime.utcnow()
-                db.commit()
                 crud.update_registration_task(db, task_uuid, email_service_id=selected_service.id)
                 provider_meta = get_tempmail_provider_meta(provider)
                 logger.info(

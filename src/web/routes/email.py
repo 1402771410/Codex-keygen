@@ -320,9 +320,15 @@ async def delete_email_service(service_id: int):
         if service.is_immutable:
             raise HTTPException(status_code=400, detail="固定内置服务不可删除")
 
+        current_settings = get_settings()
+        clear_single_service_id = current_settings.tempmail_single_service_id == service.id
         service_name = service.name
         db.delete(service)
         db.commit()
+
+        if clear_single_service_id:
+            update_settings(tempmail_single_service_id=None)
+
         return {"success": True, "message": f"服务 {service_name} 已删除"}
 
 
@@ -336,6 +342,9 @@ async def test_email_service(service_id: int):
         if not service:
             raise HTTPException(status_code=404, detail="服务不存在")
         _ensure_tempmail_type(service.service_type)
+
+        if service.is_immutable:
+            raise HTTPException(status_code=400, detail="固定内置服务仅允许启用/禁用")
 
         try:
             config = _normalize_tempmail_config(service.config, provider_hint=service.provider)

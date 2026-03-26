@@ -454,9 +454,10 @@ async def update_tempmail_settings(request: TempmailSettings):
                 service = db.query(EmailServiceModel).filter(
                     EmailServiceModel.id == single_service_id,
                     EmailServiceModel.service_type == "tempmail",
+                    EmailServiceModel.enabled == True,
                 ).first()
                 if not service:
-                    raise HTTPException(status_code=400, detail="single_service_id 对应服务不存在")
+                    raise HTTPException(status_code=400, detail="single_service_id 对应服务不存在或未启用")
 
         update_dict["tempmail_single_service_id"] = single_service_id
 

@@ -160,17 +160,18 @@ function renderSingleServiceOptions() {
         return;
     }
 
+    const selectableRules = tempmailRules.filter((service) => service.enabled);
+
     const options = [
         '<option value="">自动选择首个启用规则</option>',
-        ...tempmailRules.map((service) => {
+        ...selectableRules.map((service) => {
             const providerLabel = service.provider_label || service.provider || 'Tempmail';
-            const status = service.enabled ? '' : '（已禁用）';
-            return `<option value="${service.id}">${escapeHtml(`${service.name} / ${providerLabel}${status}`)}</option>`;
+            return `<option value="${service.id}">${escapeHtml(`${service.name} / ${providerLabel}`)}</option>`;
         }),
     ];
     elements.globalSingleServiceId.innerHTML = options.join('');
 
-    if (globalSingleServiceId) {
+    if (globalSingleServiceId && selectableRules.some((service) => service.id === globalSingleServiceId)) {
         elements.globalSingleServiceId.value = String(globalSingleServiceId);
     } else {
         elements.globalSingleServiceId.value = '';
@@ -313,6 +314,9 @@ function renderTempmailRulesTable() {
         const deleteButton = item.is_immutable
             ? ''
             : `<button type="button" class="btn btn-danger btn-sm" onclick="deleteTempmailRule(${item.id}, '${escapeHtml(item.name || '')}')">删除</button>`;
+        const testButton = item.is_immutable
+            ? ''
+            : `<button type="button" class="btn btn-secondary btn-sm" onclick="testTempmailRule(${item.id})">测试</button>`;
 
         return `
             <tr>
@@ -326,7 +330,7 @@ function renderTempmailRulesTable() {
                 <td>
                     <div style="display:flex;gap:4px;align-items:center;white-space:nowrap;flex-wrap:wrap;">
                         ${editButton}
-                        <button type="button" class="btn btn-secondary btn-sm" onclick="testTempmailRule(${item.id})">测试</button>
+                        ${testButton}
                         <button type="button" class="btn btn-secondary btn-sm" onclick="toggleTempmailRule(${item.id}, ${!item.enabled})">${item.enabled ? '禁用' : '启用'}</button>
                         ${deleteButton}
                     </div>
