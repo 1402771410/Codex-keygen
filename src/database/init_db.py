@@ -6,7 +6,7 @@ from sqlalchemy import text
 
 from .session import init_database
 from .models import Base
-from .tempmail_bootstrap import ensure_builtin_tempmail_services
+from .tempmail_bootstrap import ensure_builtin_tempmail_services, get_tempmail_runtime_state
 
 
 def initialize_database(database_url: Optional[str] = None):
@@ -30,6 +30,7 @@ def initialize_database(database_url: Optional[str] = None):
         db = db_manager.SessionLocal()
         try:
             ensure_builtin_tempmail_services(db, settings)
+            get_tempmail_runtime_state(db, settings)
         finally:
             db.close()
     except Exception as e:
@@ -62,6 +63,7 @@ def reset_database(database_url: Optional[str] = None):
         db = db_manager.SessionLocal()
         try:
             ensure_builtin_tempmail_services(db, settings)
+            get_tempmail_runtime_state(db, settings)
         finally:
             db.close()
     except Exception as e:

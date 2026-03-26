@@ -115,6 +115,12 @@ class DatabaseSessionManager:
             ("email_services", "is_builtin", "BOOLEAN DEFAULT 0"),
             ("email_services", "is_immutable", "BOOLEAN DEFAULT 0"),
             ("email_services", "builtin_key", "VARCHAR(100)"),
+            ("email_services", "provider_runtime_meta", "TEXT"),
+            ("email_services", "last_test_status", "VARCHAR(20)"),
+            ("email_services", "last_tested_at", "DATETIME"),
+            ("email_services", "last_test_message", "TEXT"),
+            ("email_services", "selection_mode", "VARCHAR(20)"),
+            ("email_services", "single_service_id", "INTEGER"),
         ]
 
         # 确保新表存在（create_tables 已处理，此处兜底）

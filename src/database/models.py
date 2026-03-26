@@ -98,6 +98,12 @@ class EmailService(Base):
     is_immutable = Column(Boolean, default=False)  # 是否固定项（不可编辑/删除）
     builtin_key = Column(String(100))  # 预置项唯一键（逻辑唯一）
     priority = Column(Integer, default=0)  # 使用优先级
+    provider_runtime_meta = Column(JSONEncodedDict)  # 供应商运行时元数据
+    last_test_status = Column(String(20))  # 最近一次测试状态：success/failed
+    last_tested_at = Column(DateTime)  # 最近一次测试时间
+    last_test_message = Column(Text)  # 最近一次测试结果信息
+    selection_mode = Column(String(20))  # 临时邮箱选择模式（single/multi）
+    single_service_id = Column(Integer)  # single 模式固定服务 ID
     last_used = Column(DateTime)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
