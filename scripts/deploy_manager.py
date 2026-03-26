@@ -23,7 +23,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Optional, Sequence, Tuple
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
@@ -76,6 +76,18 @@ def format_command(command: Sequence[str]) -> str:
 def run_command(command: Sequence[str], check: bool = True, cwd: Path = ROOT_DIR) -> subprocess.CompletedProcess:
     print(f"[执行] {format_command(command)}")
     result = subprocess.run(command, cwd=str(cwd), check=False)
+    if check and result.returncode != 0:
+        raise DeployError(f"命令执行失败（退出码 {result.returncode}）：{format_command(command)}")
+    return result
+
+
+def run_command_capture(command: Sequence[str], check: bool = True, cwd: Path = ROOT_DIR) -> subprocess.CompletedProcess:
+    print(f"[执行] {format_command(command)}")
+    result = subprocess.run(command, cwd=str(cwd), check=False, capture_output=True, text=True)
+    if result.stdout:
+        print(result.stdout.rstrip())
+    if result.stderr:
+        print(result.stderr.rstrip())
     if check and result.returncode != 0:
         raise DeployError(f"命令执行失败（退出码 {result.returncode}）：{format_command(command)}")
     return result
@@ -262,7 +274,18 @@ def mask_secret(secret: str) -> str:
 
 def ask_password(prompt: str, current_value: str) -> str:
     notice = "（留空保持当前）" if current_value else ""
-    raw = getpass.getpass(f"{prompt}{notice}：")
+    visible_input = os.environ.get("KEYGEN_VISIBLE_PASSWORD", "").strip().lower() in {"1", "true", "yes"}
+    if visible_input or not getattr(sys.stdin, "isatty", lambda: False)():
+        print(f"{prompt}{notice}（当前终端将使用可见输入）")
+        raw = input("请输入登录密码（可见输入）：").strip()
+    else:
+        print(f"{prompt}{notice}（输入时不显示字符，直接输入后回车）")
+        try:
+            raw = getpass.getpass("请输入登录密码：")
+        except Exception as exc:  # noqa: BLE001
+            print(f"当前终端不支持隐藏输入，切换为可见输入模式。详情：{exc}")
+            raw = input("请输入登录密码（可见输入）：").strip()
+
     if raw:
         return raw
     return current_value
@@ -321,11 +344,18 @@ def recommendation(config: Dict[str, Any]) -> Tuple[str, str]:
     return "local", "未知系统，推荐本地部署"
 
 
-def wait_http_ready(url: str, timeout_seconds: int = DEPLOY_HEALTH_TIMEOUT_SECONDS, interval_seconds: int = DEPLOY_HEALTH_INTERVAL_SECONDS) -> Tuple[bool, str]:
+def wait_http_ready(
+    url: str,
+    timeout_seconds: int = DEPLOY_HEALTH_TIMEOUT_SECONDS,
+    interval_seconds: int = DEPLOY_HEALTH_INTERVAL_SECONDS,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+) -> Tuple[bool, str]:
     deadline = time.time() + timeout_seconds
     last_error = ""
+    attempts = 0
 
     while time.time() < deadline:
+        attempts += 1
         try:
             req = urllib_request.Request(url=url, method="GET")
             with urllib_request.urlopen(req, timeout=5) as response:
@@ -336,6 +366,10 @@ def wait_http_ready(url: str, timeout_seconds: int = DEPLOY_HEALTH_TIMEOUT_SECON
             last_error = str(exc)
         except Exception as exc:  # noqa: BLE001
             last_error = str(exc)
+
+        if progress_callback is not None:
+            elapsed_seconds = int(timeout_seconds - max(0, deadline - time.time()))
+            progress_callback(attempts, elapsed_seconds, last_error)
 
         time.sleep(interval_seconds)
 
@@ -357,23 +391,67 @@ def run_local_preflight() -> None:
     print("本地预检查通过：应用可导入且 FastAPI 实例可构建。")
 
 
-def print_docker_diagnostics(compose_cmd: Sequence[str]) -> None:
+def print_docker_diagnostics(compose_cmd: Sequence[str]) -> str:
     print_section("Docker 失败诊断")
-    run_command(list(compose_cmd) + ["ps"], check=False)
-    run_command(list(compose_cmd) + ["logs", "--tail", "120"], check=False)
+    ps_result = run_command_capture(list(compose_cmd) + ["ps", "-a"], check=False)
+    container_result = run_command_capture(list(compose_cmd) + ["ps", "-q", "webui"], check=False)
+    container_id = (container_result.stdout or "").strip()
+
+    if container_id:
+        run_command_capture(
+            [
+                "docker",
+                "inspect",
+                "-f",
+                "State={{.State.Status}} RestartCount={{.RestartCount}} ExitCode={{.State.ExitCode}} Error={{.State.Error}}",
+                container_id,
+            ],
+            check=False,
+        )
+        run_command_capture(
+            ["docker", "inspect", "-f", "Ports={{json .NetworkSettings.Ports}}", container_id],
+            check=False,
+        )
+
+    logs_result = run_command_capture(list(compose_cmd) + ["logs", "--tail", "120"], check=False)
+    merged_output = "\n".join(
+        [
+            ps_result.stdout or "",
+            ps_result.stderr or "",
+            logs_result.stdout or "",
+            logs_result.stderr or "",
+        ]
+    )
+    return merged_output
 
 
 def run_docker_health_check(config: Dict[str, Any], compose_cmd: Sequence[str]) -> None:
     print_section("Docker 部署健康检查")
     url = f"http://127.0.0.1:{config['port']}/login"
-    ok, detail = wait_http_ready(url)
+    spinner = ["|", "/", "-", "\\"]
+
+    def _progress(attempt: int, elapsed_seconds: int, last_error: str) -> None:
+        icon = spinner[(attempt - 1) % len(spinner)]
+        message = f"\r健康检查中 {icon} 已等待 {elapsed_seconds}s（最长 {DEPLOY_HEALTH_TIMEOUT_SECONDS}s）"
+        if last_error and elapsed_seconds > 0 and elapsed_seconds % 10 == 0:
+            brief_error = last_error.replace("\n", " ")[:120]
+            message += f" 最近错误: {brief_error}"
+        print(message, end="", flush=True)
+
+    ok, detail = wait_http_ready(url, progress_callback=_progress)
+    print()
     if ok:
         print(f"健康检查通过：{url} ({detail})")
         return
 
     print(f"健康检查失败：{url}，原因：{detail}")
-    print_docker_diagnostics(compose_cmd)
-    raise DeployError("Docker 服务启动后未通过健康检查，请根据上方日志排查")
+    diagnostics = print_docker_diagnostics(compose_cmd)
+
+    hint = ""
+    if "AttributeError: OUTLOOK" in diagnostics:
+        hint = " 检测到旧版 OUTLOOK 枚举残留，请先执行 `git pull --ff-only` 更新到最新代码后重试。"
+
+    raise DeployError(f"Docker 服务启动后未通过健康检查，请根据上方日志排查。{hint}")
 
 
 def choose_mode(mode_arg: str, config: Dict[str, Any], interactive: bool) -> str:
@@ -398,6 +476,32 @@ def choose_mode(mode_arg: str, config: Dict[str, Any], interactive: bool) -> str
         return "docker" if choice == "1" else "local"
 
     return rec_mode
+
+
+def maybe_sync_repo_before_deploy(interactive: bool) -> None:
+    if not command_exists("git"):
+        return
+    if not (ROOT_DIR / ".git").exists():
+        return
+
+    run_command(["git", "fetch", "--all", "--prune"], check=False)
+    status_result = run_command_capture(["git", "status", "-sb"], check=False)
+    first_line = (status_result.stdout or "").splitlines()[0] if (status_result.stdout or "").splitlines() else ""
+
+    if "[behind " not in first_line:
+        return
+
+    print("检测到当前目录代码落后远程分支，部署旧代码可能导致容器启动失败。")
+    if not interactive:
+        print("非交互模式下将继续使用当前代码部署。建议先执行：git pull --ff-only")
+        return
+
+    if ask_yes_no("是否现在自动执行 git pull --ff-only 后继续部署？", default_yes=True):
+        pull_result = run_command(["git", "pull", "--ff-only"], check=False)
+        if pull_result.returncode == 0:
+            print("代码已更新，将继续部署。")
+        else:
+            print("git pull 失败，将继续使用当前代码部署。")
 
 
 def sudo_prefix() -> Sequence[str]:
@@ -615,6 +719,8 @@ def do_deploy(
     config = normalize_config(config_override) if config_override is not None else load_config()
     if interactive:
         config = update_config_from_prompt(config)
+
+    maybe_sync_repo_before_deploy(interactive=interactive)
 
     env_snapshots = snapshot_files([DOTENV_PATH, DOCKER_ENV_PATH])
 

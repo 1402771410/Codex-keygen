@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   webui:
     image: ${IMAGE_NAME:-codex-keygen}:${IMAGE_TAG:-latest}
