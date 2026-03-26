@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -25,9 +26,19 @@ if str(ROOT_DIR) not in sys.path:
 from scripts import deploy_manager, package_manager  # noqa: E402
 
 
+def detect_launcher() -> str:
+    """根据 launcher 环境变量检测实际调用的程序名，用于 help 输出。"""
+    launcher = os.environ.get("KEYGEN_LAUNCHER", "").strip()
+    if launcher:
+        return launcher
+    # 无 launcher 时回退为已安装包的入口名（keygen），供 pyproject 脚本入口调用时使用
+    return "keygen"
+
+
 def build_parser() -> argparse.ArgumentParser:
+    launcher = detect_launcher()
     parser = argparse.ArgumentParser(
-        prog="keygen",
+        prog=launcher,
         description="统一部署/升级/打包/配置命令入口",
     )
     subparsers = parser.add_subparsers(dest="command")

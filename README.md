@@ -134,20 +134,18 @@ cd /root/Codex-keygen && git pull --ff-only && ./keygen upgrade
 | macOS/Linux | `./keygen` | 首次执行前：`chmod +x keygen` |
 | 已安装 Python 包 | `keygen` | 通过 `pyproject` 的脚本入口调用 |
 
-### 一键安装（同一条命令）
+### 一键安装
 
 > 部署参数统一维护在根目录 `runtime-config.json`（端口、登录账号、登录密码等实时可改）。
 
-```bash
-keygen install
+按系统实际执行：
+
+```powershell
+# Windows（PowerShell / CMD）
+.\keygen.bat install
 ```
 
-按不同系统实际执行示例：
-
 ```bash
-# Windows
-.\keygen.bat install
-
 # macOS/Linux
 ./keygen install
 ```
@@ -175,18 +173,16 @@ keygen install
   - 本地模式：检查 `webui` 与 FastAPI 应用可导入
 - 安装失败时自动回滚 `.env` / `.env.docker`；Docker 失败会打印 `ps -a`、容器状态/端口、最近日志，本地失败会输出错误信息。
 
-### 一键升级（同一条命令）
+### 一键升级
 
-```bash
-keygen upgrade
+按系统实际执行：
+
+```powershell
+# Windows（PowerShell / CMD）
+.\keygen.bat upgrade
 ```
 
-按不同系统实际执行示例：
-
 ```bash
-# Windows
-.\keygen.bat upgrade
-
 # macOS/Linux
 ./keygen upgrade
 ```
@@ -196,45 +192,41 @@ keygen upgrade
 - Docker 模式执行镜像更新并重建容器
 - 本地模式执行依赖更新（`uv sync` 或 `pip install -r requirements.txt`）
 
-### 配置面板（同一条命令）
+### 配置面板
 
-```bash
-keygen config
+按系统实际执行：
+
+```powershell
+# Windows（PowerShell / CMD）
+.\keygen.bat config
 ```
 
-按不同系统实际执行示例：
-
 ```bash
-# Windows
-.\keygen.bat config
-
 # macOS/Linux
 ./keygen config
 ```
 
 可在菜单中修改：端口、登录账号、登录密码、debug、日志级别，并可一键保存/安装。
 
-> 直接输入 `keygen`（不带子命令）默认打开配置面板。
+> 直接输入 `.\keygen.bat`（Windows）或 `./keygen`（macOS/Linux）不带子命令默认打开配置面板。
 
-### 一键打包（同一条命令）
+### 一键打包
 
-```bash
-keygen package
+按系统实际执行：
+
+```powershell
+# Windows（PowerShell / CMD）
+.\keygen.bat package
 ```
 
-按不同系统实际执行示例：
-
 ```bash
-# Windows
-.\keygen.bat package
-
 # macOS/Linux
 ./keygen package
 ```
 
 打包行为：
 - 自动识别当前系统并打包对应产物（Windows -> win 包；macOS -> mac 包）
-- 如需强制目标可使用：`keygen package --target windows|macos`
+- 如需强制目标可使用：`.\keygen.bat package --target windows|macos`（Windows）或 `./keygen package --target windows|macos`（macOS/Linux）
 - 打包前会自动检查并补齐环境依赖：
   - 核心依赖探测失败时自动安装（`requirements.txt` / `-e .`）
   - `PyInstaller` 缺失时自动安装
@@ -299,7 +291,7 @@ python webui.py --host 0.0.0.0 --port 8080 --access-password mypassword
 
 #### 使用 docker-compose (推荐)
 
-在项目根目录下启动（推荐使用 `keygen install` 生成的 `.env.docker`）：
+在项目根目录下启动（推荐使用 `.\keygen.bat install`（Windows）或 `./keygen install`（macOS/Linux）生成的 `.env.docker`）：
 
 ```bash
 docker compose --env-file .env.docker up -d --build
@@ -484,7 +476,7 @@ Codex-keygen/
 
 ## Docker 常用命令（补充）
 
-> 推荐优先使用 `keygen install`。以下命令用于手动排障或手动运维。
+> 推荐优先使用 `.\keygen.bat install`（Windows）或 `./keygen install`（macOS/Linux）。以下命令用于手动排障或手动运维。
 
 ```bash
 # 按 keygen install 生成的 .env.docker 启动

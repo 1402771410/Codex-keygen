@@ -4,6 +4,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
+# 传递 launcher 上下文供 help 输出使用
+export KEYGEN_LAUNCHER="./keygen"
+
 if [ -x "$ROOT_DIR/.venv/bin/python" ]; then
   PYTHON_CMD=("$ROOT_DIR/.venv/bin/python")
 elif command -v python3 >/dev/null 2>&1 && python3 -c "import sys" >/dev/null 2>&1; then
