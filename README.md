@@ -171,6 +171,7 @@ keygen install
 - 安装完成后自动执行健康检查：
   - Docker 模式：检查 `http://127.0.0.1:<port>/login`
   - Docker 健康检查会显示加载进度（等待秒数与轮询状态）
+  - 若检测到应用可能仍监听默认 1455，会额外探测 `1455` 作为诊断依据（不作为通过条件）
   - 本地模式：检查 `webui` 与 FastAPI 应用可导入
 - 安装失败时自动回滚 `.env` / `.env.docker`；Docker 失败会打印 `ps -a`、容器状态/端口、最近日志，本地失败会输出错误信息。
 
@@ -268,7 +269,8 @@ cp .env.example .env
 | `APP_ACCESS_PASSWORD` | Web UI 访问密钥 | `admin123` |
 | `APP_DATABASE_URL` | 数据库连接字符串 | `data/database.db` |
 
-> 优先级：命令行参数 > `runtime-config.json` > `.env` > 数据库设置 > 默认值。
+> 启动阶段优先级：已存在环境变量（如 Docker 注入） > `runtime-config.json` > `.env` > 数据库设置 > 默认值。
+> 命令行参数会先写入数据库；若同名环境变量已存在，启动时仍以环境变量为准。
 
 ### 启动 Web UI
 
