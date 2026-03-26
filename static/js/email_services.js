@@ -5,6 +5,7 @@
 const elements = {
     rulesTotal: document.getElementById('rules-total'),
     rulesEnabled: document.getElementById('rules-enabled'),
+    rulesAvailable: document.getElementById('rules-available'),
 
     addRuleBtn: document.getElementById('add-rule-btn'),
     rulesTable: document.getElementById('tempmail-rules-table'),
@@ -24,6 +25,11 @@ const elements = {
     ruleTimeout: document.getElementById('rule-timeout'),
     ruleMaxRetries: document.getElementById('rule-max-retries'),
     ruleEnabled: document.getElementById('rule-enabled'),
+    ruleEnabledHint: document.getElementById('rule-enabled-hint'),
+
+    testProgressModal: document.getElementById('test-progress-modal'),
+    testProgressTitle: document.getElementById('test-progress-title'),
+    testProgressDetail: document.getElementById('test-progress-detail'),
 };
 
 const fallbackProviders = [
@@ -36,6 +42,7 @@ const fallbackProviders = [
 
 let tempmailRules = [];
 let providerOptions = [...fallbackProviders];
+const activeTests = new Set();
 
 document.addEventListener('DOMContentLoaded', async () => {
     bindEvents();
@@ -91,6 +98,98 @@ function renderProviderSelect() {
     }).join('');
 }
 
+function isRuleAvailable(rule) {
+    if (typeof rule?.available === 'boolean') {
+        return rule.available;
+    }
+    const testStatus = String(rule?.last_test_status || '').trim().toLowerCase();
+    const testMessage = String(rule?.last_test_message || '').trim().toLowerCase();
+    return testStatus === 'success' && testMessage.includes('[otp_received]');
+}
+
+function getTestResultMeta(rule) {
+    const raw = String(rule?.last_test_message || '').trim();
+    const status = String(rule?.last_test_status || '').trim().toLowerCase();
+
+    if (!raw) {
+        return {
+            fullText: '未测试',
+            shortText: '未测试',
+            className: 'muted',
+        };
+    }
+
+    const shortText = raw.length > 42 ? `${raw.slice(0, 42)}...` : raw;
+    return {
+        fullText: raw,
+        shortText,
+        className: status === 'success' ? 'success' : 'error',
+    };
+}
+
+function updateRuleEnabledHint(text) {
+    if (!elements.ruleEnabledHint) {
+        return;
+    }
+    elements.ruleEnabledHint.textContent = text;
+}
+
+function syncRuleEnabledState(rule = null) {
+    if (!elements.ruleEnabled) {
+        return;
+    }
+
+    if (!rule) {
+        elements.ruleEnabled.checked = false;
+        elements.ruleEnabled.disabled = true;
+        updateRuleEnabledHint('新增规则默认不可启用，请先测试通过后再启用。');
+        return;
+    }
+
+    const available = isRuleAvailable(rule);
+    const enabled = Boolean(rule.enabled);
+    elements.ruleEnabled.checked = enabled;
+    elements.ruleEnabled.disabled = !enabled && !available;
+
+    if (enabled && available) {
+        updateRuleEnabledHint('该规则已通过测试，可继续保持启用。');
+        return;
+    }
+
+    if (enabled && !available) {
+        updateRuleEnabledHint('该规则当前为启用状态，但尚未通过最新 OTP 测试，建议重新测试。');
+        return;
+    }
+
+    if (available) {
+        updateRuleEnabledHint('该规则已通过测试，可在保存时启用。');
+        return;
+    }
+
+    updateRuleEnabledHint('该规则尚未通过 OTP 测试，暂不可启用。');
+}
+
+function showTestProgressModal(ruleName) {
+    if (!elements.testProgressModal) {
+        return;
+    }
+    const displayName = ruleName || '当前规则';
+    if (elements.testProgressTitle) {
+        elements.testProgressTitle.textContent = '测试中，请等待...';
+    }
+    if (elements.testProgressDetail) {
+        elements.testProgressDetail.textContent = `正在验证「${displayName}」并等待真实 OTP 验证，请勿关闭页面。`;
+    }
+    elements.testProgressModal.classList.add('active');
+}
+
+function hideTestProgressModal() {
+    if (!elements.testProgressModal) {
+        return;
+    }
+    elements.testProgressModal.classList.remove('active');
+}
+
 async function loadTempmailRules() {
     try {
         const result = await api.get('/email-services?service_type=tempmail');
@@ -100,9 +199,9 @@ async function loadTempmailRules() {
     } catch (error) {
         elements.rulesTable.innerHTML = `
             <tr>
-                <td colspan="7">
+                <td colspan="9">
                     <div class="empty-state">
-                        <div class="empty-state-icon">❌</div>
+                        <div class="empty-state-icon">✕</div>
                         <div class="empty-state-title">加载失败</div>
                         <div class="empty-state-description">${escapeHtml(error.message)}</div>
                     </div>
@@ -114,11 +213,15 @@ async function loadTempmailRules() {
 
 function updateStats() {
     const enabledCount = tempmailRules.filter((item) => item.enabled).length;
+    const availableCount = tempmailRules.filter((item) => isRuleAvailable(item)).length;
     if (elements.rulesTotal) {
         elements.rulesTotal.textContent = String(tempmailRules.length);
     }
     if (elements.rulesEnabled) {
         elements.rulesEnabled.textContent = String(enabledCount);
+    }
+    if (elements.rulesAvailable) {
+        elements.rulesAvailable.textContent = String(availableCount);
     }
 }
 
@@ -130,11 +233,11 @@ function renderTempmailRulesTable() {
     if (tempmailRules.length === 0) {
         elements.rulesTable.innerHTML = `
             <tr>
-                <td colspan="7">
+                <td colspan="9">
                     <div class="empty-state">
-                        <div class="empty-state-icon">📭</div>
+                        <div class="empty-state-icon">□</div>
                         <div class="empty-state-title">暂无临时邮箱规则</div>
-                        <div class="empty-state-description">点击"添加规则"配置邮箱调用方式和参数。</div>
+                        <div class="empty-state-description">点击“添加规则”配置邮箱调用方式和参数。</div>
                     </div>
                 </td>
             </tr>
@@ -145,6 +248,7 @@ function renderTempmailRulesTable() {
     elements.rulesTable.innerHTML = tempmailRules.map((item) => {
         const config = item.config || {};
         const providerLabel = item.provider_label || item.provider || 'Tempmail';
+        const callStyle = item.provider_runtime_meta?.call_style || '';
         const summaryParts = [];
         if (config.base_url) {
             summaryParts.push(`API: ${escapeHtml(config.base_url)}`);
@@ -158,33 +262,50 @@ function renderTempmailRulesTable() {
         summaryParts.push(`超时: ${Number(config.timeout || 30)}s`);
         summaryParts.push(`重试: ${Number(config.max_retries || 3)}`);
 
-        const fixedTag = item.is_immutable
-            ? '<span style="display:inline-block;padding:2px 8px;border-radius:10px;background:rgba(255,183,3,.14);color:#ad6800;font-size:12px;">固定</span>'
-            : '';
+        const fixedTag = item.is_immutable ? '<span class="mailhub-fixed-tag">固定</span>' : '';
+        const available = isRuleAvailable(item);
+        const testMeta = getTestResultMeta(item);
+        const testingNow = activeTests.has(item.id);
 
         const editButton = item.is_immutable
             ? ''
-            : `<button type="button" class="btn btn-secondary btn-sm" onclick="editTempmailRule(${item.id})">编辑</button>`;
+            : `<button type="button" class="semi-action-btn mini neutral" onclick="editTempmailRule(${item.id})">编辑</button>`;
         const deleteButton = item.is_immutable
             ? ''
-            : `<button type="button" class="btn btn-danger btn-sm" onclick="deleteTempmailRule(${item.id}, '${escapeHtml(item.name || '')}')">删除</button>`;
-        const testButton = item.is_immutable
-            ? ''
-            : `<button type="button" class="btn btn-secondary btn-sm" onclick="testTempmailRule(${item.id})">测试</button>`;
+            : `<button type="button" class="semi-action-btn mini danger" onclick="deleteTempmailRule(${item.id}, '${escapeHtml(item.name || '')}')">删除</button>`;
+        const testButton = `<button type="button" class="semi-action-btn mini neutral" ${testingNow ? 'disabled' : ''} onclick="testTempmailRule(${item.id})">${testingNow ? '测试中' : '测试'}</button>`;
+
+        const toggleToEnable = !item.enabled;
+        const toggleDisabled = toggleToEnable && !available;
+        const toggleHint = toggleDisabled ? '需先通过测试才可启用' : '';
 
         return `
             <tr>
                 <td>${item.id}</td>
-                <td>${escapeHtml(item.name || '-')} ${fixedTag}</td>
-                <td>${escapeHtml(providerLabel)}</td>
+                <td>
+                    <div class="rule-name-cell">
+                        <span>${escapeHtml(item.name || '-')}</span>
+                        ${fixedTag}
+                    </div>
+                </td>
+                <td>
+                    <div class="provider-text">${escapeHtml(providerLabel)}</div>
+                    ${callStyle ? `<div class="provider-meta">${escapeHtml(callStyle)}</div>` : ''}
+                </td>
                 <td style="font-size: 0.8125rem; color: var(--text-secondary);">${summaryParts.join(' / ')}</td>
                 <td>${item.priority ?? 0}</td>
                 <td>${item.enabled ? '<span class="status-badge active">启用</span>' : '<span class="status-badge disabled">禁用</span>'}</td>
+                <td>${available ? '<span class="status-badge running">可用</span>' : '<span class="status-badge error">不可用</span>'}</td>
                 <td>
-                    <div style="display:flex;gap:4px;align-items:center;white-space:nowrap;flex-wrap:wrap;">
+                    <span class="test-result-text ${escapeHtml(testMeta.className)}" title="${escapeHtml(testMeta.fullText)}">
+                        ${escapeHtml(testMeta.shortText)}
+                    </span>
+                </td>
+                <td>
+                    <div class="rule-action-group">
                         ${editButton}
                         ${testButton}
-                        <button type="button" class="btn btn-secondary btn-sm" onclick="toggleTempmailRule(${item.id}, ${!item.enabled})">${item.enabled ? '禁用' : '启用'}</button>
+                        <button type="button" class="semi-action-btn mini ${toggleToEnable ? 'primary' : 'neutral'}" ${toggleDisabled ? 'disabled' : ''} title="${escapeHtml(toggleHint)}" onclick="toggleTempmailRule(${item.id}, ${toggleToEnable})">${toggleToEnable ? '启用' : '停用'}</button>
                         ${deleteButton}
                     </div>
                 </td>
@@ -217,8 +338,8 @@ function openRuleModal(rule = null) {
     elements.rulePreferredDomain.value = config.preferred_domain || '';
     elements.ruleTimeout.value = String(config.timeout || 30);
     elements.ruleMaxRetries.value = String(config.max_retries || 3);
-    elements.ruleEnabled.checked = isEdit ? Boolean(rule.enabled) : true;
 
+    syncRuleEnabledState(rule);
     elements.ruleModal.classList.add('active');
 }
 
@@ -229,6 +350,7 @@ function closeRuleModalHandler() {
     if (elements.ruleProvider) {
         elements.ruleProvider.disabled = false;
     }
+    syncRuleEnabledState(null);
 }
 
 async function handleSaveRule(event) {
@@ -240,10 +362,23 @@ async function handleSaveRule(event) {
     const priority = Number(elements.rulePriority.value || 0);
     const timeout = Number(elements.ruleTimeout.value || 30);
     const maxRetries = Number(elements.ruleMaxRetries.value || 3);
+    const enableRequested = Boolean(elements.ruleEnabled.checked);
 
     if (!name) {
         toast.error('规则名称不能为空');
         return;
+    }
+
+    if (enableRequested) {
+        if (!ruleId) {
+            toast.warning('新增规则需要先测试通过后才能启用');
+            return;
+        }
+        const currentRule = tempmailRules.find((item) => String(item.id) === String(ruleId));
+        if (!currentRule || !isRuleAvailable(currentRule)) {
+            toast.warning('该规则尚未通过真实 OTP 测试，暂不可启用');
+            return;
+        }
     }
 
     const config = {
@@ -270,7 +405,7 @@ async function handleSaveRule(event) {
             await api.patch(`/email-services/${ruleId}`, {
                 name,
                 priority,
-                enabled: Boolean(elements.ruleEnabled.checked),
+                enabled: enableRequested,
                 config,
             });
             toast.success('规则已更新');
@@ -280,10 +415,10 @@ async function handleSaveRule(event) {
                 provider,
                 name,
                 priority,
-                enabled: Boolean(elements.ruleEnabled.checked),
+                enabled: false,
                 config,
             });
-            toast.success('规则已创建');
+            toast.success('规则已创建，请先测试通过后再启用');
         }
 
         closeRuleModalHandler();
@@ -307,19 +442,46 @@ async function editTempmailRule(ruleId) {
 }
 
 async function testTempmailRule(ruleId) {
+    if (activeTests.has(ruleId)) {
+        return;
+    }
+
+    const rule = tempmailRules.find((item) => item.id === ruleId);
+    activeTests.add(ruleId);
+    renderTempmailRulesTable();
+    showTestProgressModal(rule?.name || `规则 ${ruleId}`);
+
     try {
         const result = await api.post(`/email-services/${ruleId}/test`);
+        const persistedMessage = result?.details?.persisted_message || result?.message || '';
         if (result.success) {
-            toast.success(result.message || '规则连接正常');
+            toast.success(persistedMessage || '规则测试通过，已可用于启用');
         } else {
-            toast.error(result.message || '规则连接失败');
+            toast.error(persistedMessage || result.message || '规则测试失败');
         }
     } catch (error) {
         toast.error(`测试失败: ${error.message}`);
+    } finally {
+        activeTests.delete(ruleId);
+        hideTestProgressModal();
+        await loadTempmailRules();
     }
 }
 
 async function toggleTempmailRule(ruleId, enabled) {
+    if (activeTests.has(ruleId)) {
+        toast.warning('规则正在测试中，请稍后再操作');
+        return;
+    }
+
+    if (enabled) {
+        const target = tempmailRules.find((item) => item.id === ruleId);
+        if (!target || !isRuleAvailable(target)) {
+            toast.warning('规则未通过真实 OTP 测试，暂不可启用');
+            return;
+        }
+    }
+
     const endpoint = enabled ? 'enable' : 'disable';
     try {
         await api.post(`/email-services/${ruleId}/${endpoint}`);
