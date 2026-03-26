@@ -6,10 +6,10 @@
 /* CSS 变量 - 亮色主题 */
 :root {
     /* 主色调 */
-    --primary-color: #10a37f;
-    --primary-hover: #0d8a6a;
-    --primary-light: rgba(16, 163, 127, 0.1);
-    --primary-dark: #0a7d5e;
+    --primary-color: #0064fa;
+    --primary-hover: #0057dd;
+    --primary-light: rgba(0, 100, 250, 0.12);
+    --primary-dark: #004ac7;
 
     /* 语义色 */
     --danger-color: #ef4444;
@@ -67,10 +67,10 @@
 
 /* 暗色主题 */
 [data-theme="dark"] {
-    --primary-color: #34d399;
-    --primary-hover: #6ee7b7;
-    --primary-light: rgba(52, 211, 153, 0.15);
-    --primary-dark: #10b981;
+    --primary-color: #3b82f6;
+    --primary-hover: #60a5fa;
+    --primary-light: rgba(59, 130, 246, 0.2);
+    --primary-dark: #2563eb;
 
     --danger-color: #f87171;
     --danger-hover: #fca5a5;
@@ -1225,58 +1225,8 @@ body {
 }
 
 /* ============================================
-   导入区域
-   ============================================ */
-
-.import-info {
-    background: var(--info-light);
-    border: 1px solid var(--info-color);
-    border-radius: var(--radius);
-    padding: var(--spacing-md);
-    margin-bottom: var(--spacing-md);
-    font-size: 0.875rem;
-}
-
-.import-info p {
-    margin-bottom: var(--spacing-sm);
-}
-
-.import-info ul {
-    margin: var(--spacing-sm) 0;
-    padding-left: var(--spacing-lg);
-}
-
-.import-info li {
-    margin-bottom: var(--spacing-xs);
-}
-
-.import-info code {
-    background: var(--surface);
-    padding: 2px 6px;
-    border-radius: var(--radius-sm);
-    font-family: var(--font-mono);
-    font-size: 0.8125rem;
-}
-
-.import-stats {
-    display: flex;
-    gap: var(--spacing-lg);
-    padding: var(--spacing-md);
-    background: var(--success-light);
-    border-radius: var(--radius);
-}
-
-.import-errors {
-    background: var(--danger-light);
-    border-radius: var(--radius);
-    padding: var(--spacing-md);
-    font-size: 0.8125rem;
-    color: var(--danger-color);
-}
-
-/* ============================================
-   批量统计
-   ============================================ */
+    批量统计
+    ============================================ */
 
 .batch-stats {
     display: flex;

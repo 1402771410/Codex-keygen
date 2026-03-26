@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>系统设置 - OpenAI 注册系统</title>
+    <link rel="stylesheet" href="https://unpkg.com/@douyinfe/semi-ui@2.72.0/dist/css/semi.min.css">
     <link rel="stylesheet" href="/static/css/style.css?v={{ static_version }}">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚙️</text></svg>">
 </head>
@@ -22,7 +23,7 @@
                 <a href="/settings" class="nav-link active">设置</a>
                 <a href="/logout" class="nav-link">退出</a>
             </div>
-            <button class="theme-toggle" onclick="theme.toggle()" title="切换主题">
+            <button type="button" class="theme-toggle" onclick="theme.toggle()" title="切换主题">
                 🌙
             </button>
         </nav>
@@ -36,13 +37,13 @@
 
             <!-- 设置标签页 -->
             <div class="tabs">
-                <button class="tab-btn active" data-tab="proxy">🌐 代理设置</button>
-                <button class="tab-btn" data-tab="webui">🔒 访问控制</button>
-                <button class="tab-btn" data-tab="upload">☁️ 上传</button>
-                <button class="tab-btn" data-tab="outlook">📮 Outlook配置</button>
-                <button class="tab-btn" data-tab="registration">⚙️ 注册配置</button>
-                <button class="tab-btn" data-tab="email-code">📧 验证码配置</button>
-                <button class="tab-btn" data-tab="database">💾 数据库</button>
+                <button type="button" class="tab-btn active" data-tab="proxy">🌐 代理设置</button>
+                <button type="button" class="tab-btn" data-tab="webui">🔒 访问控制</button>
+                <button type="button" class="tab-btn" data-tab="upload">☁️ 上传</button>
+                <button type="button" class="tab-btn" data-tab="tempmail">📮 临时邮箱池</button>
+                <button type="button" class="tab-btn" data-tab="registration">⚙️ 注册配置</button>
+                <button type="button" class="tab-btn" data-tab="email-code">📧 验证码配置</button>
+                <button type="button" class="tab-btn" data-tab="database">💾 数据库</button>
             </div>
 
             <!-- 代理设置 -->
@@ -94,8 +95,8 @@
                     <div class="card-header">
                         <h3>代理列表</h3>
                         <div style="display: flex; gap: var(--spacing-sm);">
-                            <button class="btn btn-secondary btn-sm" id="test-all-proxies-btn">🔌 测试全部</button>
-                            <button class="btn btn-primary btn-sm" id="add-proxy-btn">➕ 添加代理</button>
+                            <button type="button" class="btn btn-secondary btn-sm" id="test-all-proxies-btn">🔌 测试全部</button>
+                            <button type="button" class="btn btn-primary btn-sm" id="add-proxy-btn">➕ 添加代理</button>
                         </div>
                     </div>
                     <div class="card-body" style="padding: 0;">
@@ -115,7 +116,7 @@
                                 </thead>
                                 <tbody id="proxies-table">
                                     <tr>
-                                        <td colspan="7">
+                                        <td colspan="8">
                                             <div class="empty-state">
                                                 <div class="empty-state-icon">🌐</div>
                                                 <div class="empty-state-title">暂无代理</div>
@@ -134,11 +135,15 @@
             <div class="tab-content" id="webui-tab">
                 <div class="card">
                     <div class="card-header">
-                        <h3>Web UI 访问密码</h3>
-                        <span class="hint">用于访问页面的密码，留空表示不修改</span>
+                        <h3>Web UI 访问凭据</h3>
+                        <span class="hint">用于访问页面的账号和密码，密码留空表示不修改</span>
                     </div>
                     <div class="card-body">
                         <form id="webui-settings-form">
+                            <div class="form-group">
+                                <label for="webui-access-username">访问账号</label>
+                                <input type="text" id="webui-access-username" name="access_username" placeholder="请输入访问账号" required>
+                            </div>
                             <div class="form-group">
                                 <label for="webui-access-password">访问密码</label>
                                 <input type="password" id="webui-access-password" name="access_password" placeholder="留空保持不变" autocomplete="new-password">
@@ -156,7 +161,7 @@
                 <div class="modal-content">
                     <div class="modal-header">
                         <h3 id="proxy-modal-title">添加代理</h3>
-                        <button class="modal-close" id="close-proxy-modal">&times;</button>
+                        <button type="button" class="modal-close" id="close-proxy-modal">&times;</button>
                     </div>
                     <div class="modal-body">
                         <form id="proxy-item-form">
@@ -207,7 +212,7 @@
                 <div class="card" style="margin-top: var(--spacing-lg);">
                     <div class="card-header">
                         <h3>☁️ CPA 服务</h3>
-                        <button class="btn btn-primary btn-sm" id="add-cpa-service-btn">+ 添加服务</button>
+                        <button type="button" class="btn btn-primary btn-sm" id="add-cpa-service-btn">+ 添加服务</button>
                     </div>
                     <div class="card-body" style="padding: 0;">
                         <div class="table-container">
@@ -234,7 +239,7 @@
                 <div class="card" style="margin-top: var(--spacing-lg);">
                     <div class="card-header">
                         <h3>🔗 Sub2API 服务</h3>
-                        <button class="btn btn-primary btn-sm" id="add-sub2api-service-btn">+ 添加服务</button>
+                        <button type="button" class="btn btn-primary btn-sm" id="add-sub2api-service-btn">+ 添加服务</button>
                     </div>
                     <div class="card-body" style="padding: 0;">
                         <div class="table-container">
@@ -260,7 +265,7 @@
                 <div class="card" style="margin-top: var(--spacing-lg);">
                     <div class="card-header">
                         <h3>🚀 Team Manager 服务</h3>
-                        <button class="btn btn-primary btn-sm" id="add-tm-service-btn">+ 添加服务</button>
+                        <button type="button" class="btn btn-primary btn-sm" id="add-tm-service-btn">+ 添加服务</button>
                     </div>
                     <div class="card-body" style="padding: 0;">
                         <div class="table-container">
@@ -288,7 +293,7 @@
                 <div class="modal-content" style="max-width: 500px;">
                     <div class="modal-header">
                         <h3 id="tm-service-modal-title">添加 Team Manager 服务</h3>
-                        <button class="modal-close" id="close-tm-service-modal">&times;</button>
+                        <button type="button" class="modal-close" id="close-tm-service-modal">&times;</button>
                     </div>
                     <div class="modal-body">
                         <form id="tm-service-form">
@@ -333,7 +338,7 @@
                 <div class="modal-content" style="max-width: 500px;">
                     <div class="modal-header">
                         <h3 id="sub2api-service-modal-title">添加 Sub2API 服务</h3>
-                        <button class="modal-close" id="close-sub2api-service-modal">&times;</button>
+                        <button type="button" class="modal-close" id="close-sub2api-service-modal">&times;</button>
                     </div>
                     <div class="modal-body">
                         <form id="sub2api-service-form">
@@ -378,7 +383,7 @@
                 <div class="modal-content" style="max-width: 500px;">
                     <div class="modal-header">
                         <h3 id="cpa-service-modal-title">添加 CPA 服务</h3>
-                        <button class="modal-close" id="close-cpa-service-modal">&times;</button>
+                        <button type="button" class="modal-close" id="close-cpa-service-modal">&times;</button>
                     </div>
                     <div class="modal-body">
                         <form id="cpa-service-form">
@@ -423,26 +428,20 @@
                 </div>
             </div>
 
-            <!-- Outlook 配置 -->
-            <div class="tab-content" id="outlook-tab">
+            <!-- 临时邮箱池 -->
+            <div class="tab-content" id="tempmail-tab">
                 <div class="card">
                     <div class="card-header">
-                        <h3>Outlook OAuth 配置</h3>
-                        <span class="hint">配置 Outlook 邮箱 OAuth 认证参数</span>
+                        <h3>临时邮箱池管理入口</h3>
+                        <span class="hint">已移除旧版邮箱服务注册，仅保留临时邮箱</span>
                     </div>
                     <div class="card-body">
-                        <form id="outlook-settings-form">
-                            <div class="form-group">
-                                <label for="outlook-default-client-id">默认 Client ID</label>
-                                <input type="text" id="outlook-default-client-id" name="default_client_id"
-                                    placeholder="24d9a0ed-8787-4584-883c-2fd79308940a">
-                                <p class="hint">Outlook OAuth 应用的 Client ID。导入账户时未填写 client_id 则使用此默认值。</p>
-                            </div>
-
-                            <div class="form-actions">
-                                <button type="submit" class="btn btn-primary">💾 保存设置</button>
-                            </div>
-                        </form>
+                        <p class="hint" style="margin-bottom: var(--spacing-md);">
+                            临时邮箱规则支持：前缀规则、优先域名、独立 API 地址、启用/禁用、优先级与轮询使用。
+                        </p>
+                        <div class="form-actions" style="padding-top: 0; border-top: none;">
+                            <a href="/email-services" class="btn btn-primary">打开临时邮箱池管理</a>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -497,7 +496,7 @@
                 <div class="card">
                     <div class="card-header">
                         <h3>验证码等待配置</h3>
-                        <span class="hint">配置 Outlook 邮箱验证码获取的超时时间和轮询间隔</span>
+                        <span class="hint">配置临时邮箱验证码获取的超时时间和轮询间隔</span>
                     </div>
                     <div class="card-body">
                         <form id="email-code-form">
@@ -565,8 +564,8 @@
                         </div>
 
                         <div class="form-actions">
-                            <button class="btn btn-secondary" id="backup-btn">💾 备份数据库</button>
-                            <button class="btn btn-warning" id="cleanup-btn">🧹 清理过期数据</button>
+                            <button type="button" class="btn btn-secondary" id="backup-btn">💾 备份数据库</button>
+                            <button type="button" class="btn btn-warning" id="cleanup-btn">🧹 清理过期数据</button>
                         </div>
                     </div>
                 </div>

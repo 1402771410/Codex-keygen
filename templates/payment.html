@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>支付升级 - OpenAI 注册系统</title>
+    <link rel="stylesheet" href="https://unpkg.com/@douyinfe/semi-ui@2.72.0/dist/css/semi.min.css">
     <link rel="stylesheet" href="/static/css/style.css?v={{ static_version }}">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💳</text></svg>">
     <style>
@@ -66,7 +67,7 @@
                 <a href="/settings" class="nav-link">设置</a>
                 <a href="/logout" class="nav-link">退出</a>
             </div>
-            <button class="theme-toggle" onclick="theme.toggle()" title="切换主题">🌙</button>
+            <button type="button" class="theme-toggle" onclick="theme.toggle()" title="切换主题">🌙</button>
         </nav>
 
         <!-- 主内容区 -->
@@ -148,7 +149,7 @@
 
                     <!-- 操作区 -->
                     <div class="form-actions">
-                        <button class="btn btn-primary" onclick="generateLink()">生成支付链接</button>
+                        <button type="button" class="btn btn-primary" onclick="generateLink()">生成支付链接</button>
                     </div>
 
                     <!-- 链接结果 -->
@@ -156,8 +157,8 @@
                         <label>支付链接</label>
                         <textarea class="link-text" id="link-text" readonly></textarea>
                         <div class="form-actions" style="margin-top:10px">
-                            <button class="btn btn-secondary" onclick="copyLink()">复制链接</button>
-                            <button class="btn btn-primary" onclick="openIncognito()">无痕打开浏览器</button>
+                            <button type="button" class="btn btn-secondary" onclick="copyLink()">复制链接</button>
+                            <button type="button" class="btn btn-primary" onclick="openIncognito()">无痕打开浏览器</button>
                         </div>
                         <p class="hint" id="open-status"></p>
                     </div>

@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>访问验证 - OpenAI 注册系统</title>
+    <link rel="stylesheet" href="https://unpkg.com/@douyinfe/semi-ui@2.72.0/dist/css/semi.min.css">
     <link rel="stylesheet" href="/static/css/style.css?v={{ static_version }}">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔒</text></svg>">
     <style>
@@ -38,7 +39,7 @@
             <div class="card login-card">
                 <div class="card-header">
                     <h3 class="login-title">🔒 访问验证</h3>
-                    <span class="hint">请输入访问密码继续</span>
+                    <span class="hint">请输入访问账号与密码继续</span>
                 </div>
                 <div class="card-body">
                     {% if error %}
@@ -47,8 +48,12 @@
                     <form method="post" action="/login">
                         <input type="hidden" name="next" value="{{ next }}">
                         <div class="form-group">
+                            <label for="username">访问账号</label>
+                            <input type="text" id="username" name="username" value="{{ username }}" autocomplete="username" required>
+                        </div>
+                        <div class="form-group">
                             <label for="password">访问密码</label>
-                            <input type="password" id="password" name="password" autocomplete="current-password" required autofocus>
+                            <input type="password" id="password" name="password" autocomplete="current-password" required>
                         </div>
                         <div class="form-actions" style="margin-top: var(--spacing-lg);">
                             <button type="submit" class="btn btn-primary" style="width: 100%">验证进入</button>

@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>账号管理 - OpenAI 注册系统</title>
+    <link rel="stylesheet" href="https://unpkg.com/@douyinfe/semi-ui@2.72.0/dist/css/semi.min.css">
     <link rel="stylesheet" href="/static/css/style.css?v={{ static_version }}">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📋</text></svg>">
     <style>
@@ -108,8 +109,6 @@
                         <select id="filter-service" class="form-select">
                             <option value="">全部邮箱服务</option>
                             <option value="tempmail">Tempmail</option>
-                            <option value="outlook">Outlook</option>
-                            <option value="moe_mail">MoeMail</option>
                         </select>
 
                         <input type="text" id="search-input" class="form-input" placeholder="🔍 搜索邮箱..." style="min-width: 200px;">
@@ -156,6 +155,10 @@
                                 <a href="#" class="dropdown-item" data-format="sub2api">导出 Sub2Api 格式</a>
                             </div>
                         </div>
+                        <select id="export-mode" class="form-select" title="导出模式">
+                            <option value="single_file">单文件（所有账号）</option>
+                            <option value="per_account_zip">每账号一文件（ZIP）</option>
+                        </select>
                     </div>
                 </div>
             </div>

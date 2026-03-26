@@ -40,6 +40,7 @@ const elements = {
     batchDeleteBtn: document.getElementById('batch-delete-btn'),
     exportBtn: document.getElementById('export-btn'),
     exportMenu: document.getElementById('export-menu'),
+    exportMode: document.getElementById('export-mode'),
     selectAll: document.getElementById('select-all'),
     prevPage: document.getElementById('prev-page'),
     nextPage: document.getElementById('next-page'),
@@ -1199,15 +1200,18 @@ async function exportAccounts(format) {
         return;
     }
 
+    const exportMode = elements.exportMode?.value || 'single_file';
+
     toast.info(`正在导出 ${count} 个账号...`);
 
     try {
+        const payload = buildBatchPayload({ export_mode: exportMode });
         const response = await fetch('/api/accounts/export/' + format, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify(buildBatchPayload())
+            body: JSON.stringify(payload)
         });
 
         if (!response.ok) {
@@ -1219,7 +1223,9 @@ async function exportAccounts(format) {
 
         // 从 Content-Disposition 获取文件名
         const disposition = response.headers.get('Content-Disposition');
-        let filename = `accounts_${Date.now()}.${(format === 'cpa' || format === 'sub2api') ? 'json' : format}`;
+        const preferZip = exportMode === 'per_account_zip';
+        const fallbackExt = preferZip ? 'zip' : ((format === 'cpa' || format === 'sub2api') ? 'json' : format);
+        let filename = `accounts_${Date.now()}.${fallbackExt}`;
         if (disposition) {
             const match = disposition.match(/filename=(.+)/);
             if (match) {

@@ -423,13 +423,7 @@ const statusMap = {
         cancelled: { text: '已取消', class: 'disabled' }
     },
     service: {
-        tempmail: 'Tempmail.lol',
-        outlook: 'Outlook',
-        moe_mail: 'MoeMail',
-        temp_mail: 'Temp-Mail（自部署）',
-        duck_mail: 'DuckMail',
-        freemail: 'Freemail',
-        imap_mail: 'IMAP 邮箱'
+        tempmail: '临时邮箱'
     }
 };
 
