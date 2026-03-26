@@ -8,40 +8,155 @@
     <link rel="stylesheet" href="/static/css/style.css?v={{ static_version }}">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔒</text></svg>">
     <style>
-        .login-wrap {
+        /* 登录页独特布局 - 完全不同风格 */
+        .login-page {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: var(--semi-spacing-6);
+            background: linear-gradient(135deg, var(--semi-color-bg-1) 0%, var(--semi-color-bg-2) 100%);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .login-page::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, var(--semi-color-primary-light) 0%, transparent 70%);
+            opacity: 0.5;
+            animation: pulse 15s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); opacity: 0.5; }
+            50% { transform: scale(1.1); opacity: 0.3; }
+        }
+        
+        .login-container {
+            width: 100%;
             max-width: 420px;
-            margin: 12vh auto 0;
+            position: relative;
+            z-index: 1;
         }
+        
+        .login-hero {
+            text-align: center;
+            margin-bottom: var(--semi-spacing-6);
+        }
+        
+        .login-hero-icon {
+            font-size: 3.5rem;
+            display: inline-block;
+            margin-bottom: var(--semi-spacing-3);
+            animation: float 3s ease-in-out infinite;
+        }
+        
+        @keyframes float {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
+        }
+        
+        .login-hero-title {
+            font-size: 1.7143rem;
+            font-weight: 700;
+            color: var(--semi-color-text-0);
+            margin-bottom: var(--semi-spacing-2);
+            letter-spacing: -0.02em;
+        }
+        
+        .login-hero-subtitle {
+            font-size: 0.9286rem;
+            color: var(--semi-color-text-2);
+        }
+        
         .login-card {
-            padding: var(--spacing-lg);
+            background: var(--semi-color-bg-0);
+            border-radius: var(--semi-radius-remote);
+            box-shadow: var(--semi-shadow-3), 0 0 0 1px var(--semi-border-color-light);
+            overflow: hidden;
         }
-        .login-title {
-            margin-bottom: var(--spacing-sm);
+        
+        .login-card-header {
+            padding: var(--semi-spacing-5);
+            border-bottom: 1px solid var(--semi-border-color-light);
+            text-align: center;
         }
-        .login-subtitle {
-            color: var(--text-secondary);
-            margin-bottom: var(--spacing-lg);
+        
+        .login-card-header h2 {
+            font-size: 1.1429rem;
+            font-weight: 600;
+            color: var(--semi-color-text-0);
+            margin: 0;
         }
+        
+        .login-card-body {
+            padding: var(--semi-spacing-5);
+        }
+        
         .login-error {
-            background: var(--danger-light);
-            color: var(--danger-color);
-            border: 1px solid var(--danger-color);
-            padding: var(--spacing-sm) var(--spacing-md);
-            border-radius: var(--radius);
-            margin-bottom: var(--spacing-md);
-            font-size: 0.875rem;
+            display: flex;
+            align-items: center;
+            gap: var(--semi-spacing-2);
+            padding: var(--semi-spacing-3) var(--semi-spacing-4);
+            background: var(--semi-color-danger-light);
+            color: var(--semi-color-danger);
+            border: 1px solid var(--semi-color-danger);
+            border-radius: var(--semi-radius-base);
+            margin-bottom: var(--semi-spacing-4);
+            font-size: 0.8571rem;
+        }
+        
+        .login-error::before {
+            content: '⚠️';
+        }
+        
+        .login-form-footer {
+            padding: var(--semi-spacing-4) var(--semi-spacing-5);
+            background: var(--semi-color-bg-1);
+            border-top: 1px solid var(--semi-border-color-light);
+            text-align: center;
+        }
+        
+        .login-form-footer p {
+            font-size: 0.7857rem;
+            color: var(--semi-color-text-3);
+            margin: 0;
+        }
+        
+        .login-brand-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: var(--semi-spacing-1);
+            padding: var(--semi-spacing-1) var(--semi-spacing-3);
+            background: var(--semi-color-bg-2);
+            border-radius: var(--semi-radius-full);
+            font-size: 0.7143rem;
+            color: var(--semi-color-text-2);
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="login-wrap">
-            <div class="card login-card">
-                <div class="card-header">
-                    <h3 class="login-title">🔒 访问验证</h3>
-                    <span class="hint">请输入访问账号与密码继续</span>
+    <div class="login-page">
+        <div class="login-container">
+            <!-- 头部区域 -->
+            <div class="login-hero">
+                <div class="login-hero-icon">🚀</div>
+                <h1 class="login-hero-title">OpenAI 注册系统</h1>
+                <p class="login-hero-subtitle">Codex-keygen 智能账号管理平台</p>
+            </div>
+            
+            <!-- 登录卡片 -->
+            <div class="login-card">
+                <div class="login-card-header">
+                    <h2>🔐 安全访问</h2>
                 </div>
-                <div class="card-body">
+                <div class="login-card-body">
                     {% if error %}
                     <div class="login-error">{{ error }}</div>
                     {% endif %}
@@ -55,10 +170,15 @@
                             <label for="password">访问密码</label>
                             <input type="password" id="password" name="password" autocomplete="current-password" required>
                         </div>
-                        <div class="form-actions" style="margin-top: var(--spacing-lg);">
-                            <button type="submit" class="btn btn-primary" style="width: 100%">验证进入</button>
+                        <div class="form-actions" style="margin-top: var(--semi-spacing-5);">
+                            <button type="submit" class="btn btn-primary btn-lg" style="width: 100%;">验证进入</button>
                         </div>
                     </form>
+                </div>
+                <div class="login-form-footer">
+                    <div class="login-brand-badge">
+                        <span>Powered by Codex-keygen</span>
+                    </div>
                 </div>
             </div>
         </div>
