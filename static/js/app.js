@@ -297,6 +297,12 @@ function updateEmailServiceOptions() {
         const optgroup = document.createElement('optgroup');
         optgroup.label = '🌐 临时邮箱池';
 
+        const autoOption = document.createElement('option');
+        autoOption.value = 'tempmail:default';
+        autoOption.textContent = '自动选择（按邮箱设置模式）';
+        autoOption.dataset.type = 'tempmail';
+        optgroup.appendChild(autoOption);
+
         tempmailServices.forEach(service => {
             const option = document.createElement('option');
             option.value = `tempmail:${service.id || 'default'}`;
@@ -308,6 +314,7 @@ function updateEmailServiceOptions() {
         });
 
         select.appendChild(optgroup);
+        select.value = 'tempmail:default';
         return;
     }
 
@@ -325,7 +332,12 @@ function handleServiceChange(e) {
     if (!value) return;
 
     const [type, id] = value.split(':');
-    
+
+    if (type === 'tempmail' && id === 'default') {
+        addLog('info', '[系统] 已选择自动模式，实际服务由“邮箱设置”决定（single/multi）');
+        return;
+    }
+
     // 显示服务信息
     const selectedServiceId = Number(id);
     

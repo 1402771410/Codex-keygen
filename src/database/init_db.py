@@ -1,12 +1,15 @@
-"""
-数据库初始化和初始化数据
-"""
+"""数据库初始化和初始化数据。"""
+
+from typing import Optional
+
+from sqlalchemy import text
 
 from .session import init_database
 from .models import Base
+from .tempmail_bootstrap import ensure_builtin_tempmail_services
 
 
-def initialize_database(database_url: str = None):
+def initialize_database(database_url: Optional[str] = None):
     """
     初始化数据库
     创建所有表并设置默认配置
@@ -18,13 +21,24 @@ def initialize_database(database_url: str = None):
     db_manager.create_tables()
 
     # 初始化默认设置（从 settings 模块导入以避免循环导入）
-    from ..config.settings import init_default_settings
+    from ..config.settings import get_settings, init_default_settings
     init_default_settings()
+
+    # 初始化预置临时邮箱供应商（含固定全局条目）
+    try:
+        settings = get_settings()
+        db = db_manager.SessionLocal()
+        try:
+            ensure_builtin_tempmail_services(db, settings)
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"预置临时邮箱初始化失败: {e}")
 
     return db_manager
 
 
-def reset_database(database_url: str = None):
+def reset_database(database_url: Optional[str] = None):
     """
     重置数据库（删除所有表并重新创建）
     警告：会丢失所有数据！
@@ -40,22 +54,35 @@ def reset_database(database_url: str = None):
     print("已重新创建所有表")
 
     # 初始化默认设置
-    from ..config.settings import init_default_settings
+    from ..config.settings import get_settings, init_default_settings
     init_default_settings()
+
+    try:
+        settings = get_settings()
+        db = db_manager.SessionLocal()
+        try:
+            ensure_builtin_tempmail_services(db, settings)
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"预置临时邮箱初始化失败: {e}")
 
     print("数据库重置完成")
     return db_manager
 
 
-def check_database_connection(database_url: str = None) -> bool:
+def check_database_connection(database_url: Optional[str] = None) -> bool:
     """
     检查数据库连接是否正常
     """
     try:
         db_manager = init_database(database_url)
-        with db_manager.get_db() as db:
+        db = db_manager.SessionLocal()
+        try:
             # 尝试执行一个简单的查询
-            db.execute("SELECT 1")
+            db.execute(text("SELECT 1"))
+        finally:
+            db.close()
         print("数据库连接正常")
         return True
     except Exception as e:

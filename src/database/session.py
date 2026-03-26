@@ -3,10 +3,9 @@
 """
 
 from contextlib import contextmanager
-from typing import Generator
+from typing import Generator, Optional
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.exc import SQLAlchemyError
 import os
 import logging
 
@@ -26,7 +25,7 @@ def _build_sqlalchemy_url(database_url: str) -> str:
 class DatabaseSessionManager:
     """数据库会话管理器"""
 
-    def __init__(self, database_url: str = None):
+    def __init__(self, database_url: Optional[str] = None):
         if database_url is None:
             env_url = os.environ.get("APP_DATABASE_URL") or os.environ.get("DATABASE_URL")
             if env_url:
@@ -112,6 +111,10 @@ class DatabaseSessionManager:
             ("accounts", "cookies", "TEXT"),
             ("proxies", "is_default", "BOOLEAN DEFAULT 0"),
             ("cpa_services", "include_proxy_url", "BOOLEAN DEFAULT 0"),
+            ("email_services", "provider", "VARCHAR(50) DEFAULT 'tempmail_lol'"),
+            ("email_services", "is_builtin", "BOOLEAN DEFAULT 0"),
+            ("email_services", "is_immutable", "BOOLEAN DEFAULT 0"),
+            ("email_services", "builtin_key", "VARCHAR(100)"),
         ]
 
         # 确保新表存在（create_tables 已处理，此处兜底）
@@ -137,10 +140,10 @@ class DatabaseSessionManager:
 
 
 # 全局数据库会话管理器实例
-_db_manager: DatabaseSessionManager = None
+_db_manager: Optional[DatabaseSessionManager] = None
 
 
-def init_database(database_url: str = None) -> DatabaseSessionManager:
+def init_database(database_url: Optional[str] = None) -> DatabaseSessionManager:
     """
     初始化数据库会话管理器
     """

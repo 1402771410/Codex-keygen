@@ -287,6 +287,18 @@ SETTING_DEFINITIONS: Dict[str, SettingDefinition] = {
         category=SettingCategory.TEMPMAIL,
         description="Tempmail 是否启用"
     ),
+    "tempmail_selection_mode": SettingDefinition(
+        db_key="tempmail.selection_mode",
+        default_value="single",
+        category=SettingCategory.TEMPMAIL,
+        description="临时邮箱选择模式：single 或 multi"
+    ),
+    "tempmail_single_service_id": SettingDefinition(
+        db_key="tempmail.single_service_id",
+        default_value=None,
+        category=SettingCategory.TEMPMAIL,
+        description="single 模式固定使用的临时邮箱服务 ID"
+    ),
 
     # 安全配置
     "encryption_key": SettingDefinition(
@@ -375,6 +387,7 @@ SETTING_TYPES: Dict[str, Type] = {
     "tempmail_timeout": int,
     "tempmail_max_retries": int,
     "tempmail_enabled": bool,
+    "tempmail_single_service_id": int,
     "tm_enabled": bool,
     "cpa_enabled": bool,
     "email_code_timeout": int,
@@ -389,6 +402,14 @@ def _convert_value(attr_name: str, value: str) -> Any:
     """将数据库字符串值转换为正确的类型"""
     if attr_name in SECRET_FIELDS:
         return SecretStr(value) if value else SecretStr("")
+
+    if attr_name == "tempmail_single_service_id":
+        if value in (None, "", "null", "None"):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
     target_type = SETTING_TYPES.get(attr_name, str)
 
@@ -645,6 +666,16 @@ class Settings(BaseModel):
     tempmail_timeout: int = 30
     tempmail_max_retries: int = 3
     tempmail_enabled: bool = True
+    tempmail_selection_mode: str = "single"
+    tempmail_single_service_id: Optional[int] = None
+
+    @field_validator('tempmail_selection_mode', mode='before')
+    @classmethod
+    def validate_tempmail_selection_mode(cls, value: Any) -> str:
+        normalized = str(value or "single").strip().lower()
+        if normalized not in ("single", "multi"):
+            return "single"
+        return normalized
 
     # 安全配置
     encryption_key: SecretStr = SecretStr("your-encryption-key-change-in-production")

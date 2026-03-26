@@ -90,9 +90,13 @@ class EmailService(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     service_type = Column(String(50), nullable=False)  # 'tempmail'
+    provider = Column(String(50), nullable=False, default='tempmail_lol')  # 具体供应商/调用方式
     name = Column(String(100), nullable=False)
     config = Column(JSONEncodedDict, nullable=False)  # 服务配置（加密存储）
     enabled = Column(Boolean, default=True)
+    is_builtin = Column(Boolean, default=False)  # 是否系统预置
+    is_immutable = Column(Boolean, default=False)  # 是否固定项（不可编辑/删除）
+    builtin_key = Column(String(100))  # 预置项唯一键（逻辑唯一）
     priority = Column(Integer, default=0)  # 使用优先级
     last_used = Column(DateTime)
     created_at = Column(DateTime, default=datetime.utcnow)

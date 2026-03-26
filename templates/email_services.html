@@ -28,7 +28,7 @@
         <main class="main-content">
             <div class="page-header">
                 <h2>临时邮箱池管理</h2>
-                <p class="subtitle">仅保留临时邮箱注册：可维护规则、启停规则，并在注册时按轮询策略自动选择。</p>
+                <p class="subtitle">支持多供应商调用方式、固定内置规则保护，以及单服务/多服务轮询模式。</p>
             </div>
 
             <div class="stats-grid">
@@ -65,6 +65,24 @@
                                 <input type="checkbox" id="global-enabled"> 启用全局临时邮箱
                             </label>
                         </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="global-selection-mode">服务选择模式</label>
+                                <select id="global-selection-mode" name="selection_mode">
+                                    <option value="single">单个模式（固定服务）</option>
+                                    <option value="multi">多个模式（轮询）</option>
+                                </select>
+                            </div>
+                            <div class="form-group" id="global-single-service-group">
+                                <label for="global-single-service-id">单个模式服务</label>
+                                <select id="global-single-service-id" name="single_service_id">
+                                    <option value="">自动选择首个启用规则</option>
+                                </select>
+                            </div>
+                        </div>
+                        <p class="hint" style="margin-top: -4px; margin-bottom: 8px; color: var(--text-muted);">
+                            多个模式会在已启用规则中按“最近最少使用 + 优先级”轮询。
+                        </p>
                         <div class="form-actions">
                             <button type="submit" class="btn btn-primary">💾 保存全局配置</button>
                             <button type="button" class="btn btn-secondary" id="test-global-tempmail-btn">🔌 测试全局连接</button>
@@ -85,16 +103,17 @@
                                 <tr>
                                     <th style="width: 60px;">ID</th>
                                     <th>规则名称</th>
+                                    <th style="width: 180px;">供应商</th>
                                     <th>规则内容</th>
                                     <th style="width: 80px;">优先级</th>
                                     <th style="width: 100px;">状态</th>
                                     <th style="width: 180px;">最后使用</th>
-                                    <th style="width: 210px;">操作</th>
+                                    <th style="width: 260px;">操作</th>
                                 </tr>
                             </thead>
                             <tbody id="tempmail-rules-table">
                                 <tr>
-                                    <td colspan="7">
+                                    <td colspan="8">
                                         <div class="empty-state">
                                             <div class="empty-state-icon">⏳</div>
                                             <div class="empty-state-title">加载中...</div>
@@ -122,6 +141,10 @@
                         <div class="form-group">
                             <label for="rule-name">规则名称</label>
                             <input type="text" id="rule-name" required placeholder="例如：OpenAI 专用规则">
+                        </div>
+                        <div class="form-group">
+                            <label for="rule-provider">供应商调用方式</label>
+                            <select id="rule-provider" required></select>
                         </div>
                         <div class="form-group">
                             <label for="rule-priority">优先级（越小越靠前）</label>

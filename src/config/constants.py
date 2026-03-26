@@ -5,7 +5,7 @@
 import random
 from datetime import datetime
 from enum import Enum
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 
 # ============================================================================
@@ -89,6 +89,60 @@ EMAIL_SERVICE_DEFAULTS = {
         "base_url": "https://api.tempmail.lol/v2",
         "timeout": 30,
         "max_retries": 3,
+    },
+}
+
+# 临时邮箱多供应商配置
+TEMPMAIL_DEFAULT_PROVIDER = "tempmail_lol"
+TEMPMAIL_GLOBAL_BUILTIN_KEY = "global_tempmail"
+TEMPMAIL_SELECTION_MODES = ("single", "multi")
+
+TEMPMAIL_PROVIDER_ALIASES = {
+    "tempmail": "tempmail_lol",
+    "tempmail_lol": "tempmail_lol",
+    "mail.tm": "mail_tm",
+    "mailtm": "mail_tm",
+    "mail_tm": "mail_tm",
+    "mail.gw": "mail_gw",
+    "mailgw": "mail_gw",
+    "mail_gw": "mail_gw",
+    "1secmail": "onesecmail",
+    "one_sec_mail": "onesecmail",
+    "onesecmail": "onesecmail",
+    "guerrilla": "guerrillamail",
+    "guerrillamail": "guerrillamail",
+}
+
+TEMPMAIL_PROVIDER_CATALOG: Dict[str, Dict[str, Any]] = {
+    "tempmail_lol": {
+        "label": "Tempmail.lol",
+        "description": "Token 收件箱接口（/inbox/create + /inbox?token=...）",
+        "call_style": "token_inbox",
+        "default_base_url": "https://api.tempmail.lol/v2",
+    },
+    "mail_tm": {
+        "label": "Mail.tm",
+        "description": "JWT 认证 REST 接口（/accounts /token /messages）",
+        "call_style": "jwt_rest",
+        "default_base_url": "https://api.mail.tm",
+    },
+    "mail_gw": {
+        "label": "Mail.gw",
+        "description": "与 Mail.tm 兼容的 JWT REST 接口",
+        "call_style": "jwt_rest",
+        "default_base_url": "https://api.mail.gw",
+    },
+    "onesecmail": {
+        "label": "1secmail",
+        "description": "Query Action 接口（action=genRandomMailbox/getMessages/readMessage）",
+        "call_style": "query_actions",
+        "default_base_url": "https://www.1secmail.com/api/v1/",
+    },
+    "guerrillamail": {
+        "label": "GuerrillaMail",
+        "description": "Session + Query 接口（f=get_email_address/get_email_list/fetch_email）",
+        "call_style": "session_query",
+        "default_base_url": "https://api.guerrillamail.com/ajax.php",
     },
 }
 
