@@ -13,7 +13,6 @@
 from __future__ import annotations
 
 import argparse
-import getpass
 import json
 import os
 import platform
@@ -274,17 +273,7 @@ def mask_secret(secret: str) -> str:
 
 def ask_password(prompt: str, current_value: str) -> str:
     notice = "（留空保持当前）" if current_value else ""
-    visible_input = os.environ.get("KEYGEN_VISIBLE_PASSWORD", "").strip().lower() in {"1", "true", "yes"}
-    if visible_input or not getattr(sys.stdin, "isatty", lambda: False)():
-        print(f"{prompt}{notice}（当前终端将使用可见输入）")
-        raw = input("请输入登录密码（可见输入）：").strip()
-    else:
-        print(f"{prompt}{notice}（输入时不显示字符，直接输入后回车）")
-        try:
-            raw = getpass.getpass("请输入登录密码：")
-        except Exception as exc:  # noqa: BLE001
-            print(f"当前终端不支持隐藏输入，切换为可见输入模式。详情：{exc}")
-            raw = input("请输入登录密码（可见输入）：").strip()
+    raw = input(f"{prompt}{notice}：").strip()
 
     if raw:
         return raw

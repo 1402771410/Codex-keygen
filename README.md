@@ -96,11 +96,13 @@ pip install -r requirements.txt
 if (Test-Path .\Codex-keygen\.git) { Set-Location .\Codex-keygen; git pull --ff-only } else { git clone https://github.com/1402771410/Codex-keygen.git Codex-keygen; Set-Location .\Codex-keygen }; .\keygen.bat install
 ```
 
-#### macOS / Linux（Bash）
+#### Linux（Bash）
 
 ```bash
-if [ -d Codex-keygen/.git ]; then cd Codex-keygen && git pull --ff-only; else git clone https://github.com/1402771410/Codex-keygen.git Codex-keygen && cd Codex-keygen; fi && chmod +x keygen && ./keygen install
+if [ -d /root/Codex-keygen/.git ]; then cd /root/Codex-keygen && git pull --ff-only; else cd /root && git clone https://github.com/1402771410/Codex-keygen.git Codex-keygen && cd /root/Codex-keygen; fi && chmod +x keygen && ./keygen install
 ```
+
+> Linux 服务器默认使用 `/root/Codex-keygen` 作为部署目录。
 
 > 如果 `git clone` 提示 `Username for 'https://github.com':`，说明当前走的是 HTTPS 鉴权：
 > - Username 输入你的 GitHub 用户名（如 `1402771410`）
@@ -114,10 +116,10 @@ if [ -d Codex-keygen/.git ]; then cd Codex-keygen && git pull --ff-only; else gi
 cd Codex-keygen && git pull --ff-only && .\keygen.bat upgrade
 ```
 
-#### macOS / Linux（Bash）
+#### Linux（Bash）
 
 ```bash
-cd Codex-keygen && git pull --ff-only && ./keygen upgrade
+cd /root/Codex-keygen && git pull --ff-only && ./keygen upgrade
 ```
 
 ### 统一命令入口：`keygen`
@@ -165,8 +167,7 @@ keygen install
   - 交互模式会提示是否先执行 `git pull --ff-only`
   - 非交互模式会给出明确告警，避免旧代码构建失败
 - 部署流程中会交互采集：监听地址、端口、登录账号、登录密码、debug、日志级别。
-- 登录密码默认隐藏输入；若终端不支持隐藏输入会自动回退到可见输入。
-- 也可通过环境变量强制可见输入：`KEYGEN_VISIBLE_PASSWORD=1`。
+- 登录密码与登录账号一致，使用明文可见输入。
 - 安装完成后自动执行健康检查：
   - Docker 模式：检查 `http://127.0.0.1:<port>/login`
   - Docker 健康检查会显示加载进度（等待秒数与轮询状态）
