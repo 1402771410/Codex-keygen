@@ -5,16 +5,6 @@
 const elements = {
     rulesTotal: document.getElementById('rules-total'),
     rulesEnabled: document.getElementById('rules-enabled'),
-    globalEnabledText: document.getElementById('global-enabled-text'),
-    globalBaseUrlText: document.getElementById('global-base-url-text'),
-
-    globalForm: document.getElementById('global-tempmail-form'),
-    globalBaseUrl: document.getElementById('global-base-url'),
-    globalEnabled: document.getElementById('global-enabled'),
-    globalSelectionMode: document.getElementById('global-selection-mode'),
-    globalSingleServiceGroup: document.getElementById('global-single-service-group'),
-    globalSingleServiceId: document.getElementById('global-single-service-id'),
-    testGlobalTempmailBtn: document.getElementById('test-global-tempmail-btn'),
 
     addRuleBtn: document.getElementById('add-rule-btn'),
     rulesTable: document.getElementById('tempmail-rules-table'),
@@ -46,40 +36,26 @@ const fallbackProviders = [
 
 let tempmailRules = [];
 let providerOptions = [...fallbackProviders];
-let globalSelectionMode = 'single';
-let globalSingleServiceId = null;
 
 document.addEventListener('DOMContentLoaded', async () => {
     bindEvents();
-    await Promise.all([loadProviderOptions(), loadGlobalTempmailSettings(), loadTempmailRules()]);
+    await Promise.all([loadProviderOptions(), loadTempmailRules()]);
 });
 
 function bindEvents() {
-    if (elements.globalForm) {
-        elements.globalForm.addEventListener('submit', handleSaveGlobalTempmailSettings);
-    }
-    if (elements.globalSelectionMode) {
-        elements.globalSelectionMode.addEventListener('change', () => {
-            globalSelectionMode = elements.globalSelectionMode.value || 'single';
-            updateSingleServiceVisibility();
-        });
-    }
-    if (elements.testGlobalTempmailBtn) {
-        elements.testGlobalTempmailBtn.addEventListener('click', handleTestGlobalTempmail);
-    }
     if (elements.addRuleBtn) {
         elements.addRuleBtn.addEventListener('click', () => openRuleModal());
     }
     if (elements.closeRuleModal) {
-        elements.closeRuleModal.addEventListener('click', closeRuleModal);
+        elements.closeRuleModal.addEventListener('click', closeRuleModalHandler);
     }
     if (elements.cancelRuleBtn) {
-        elements.cancelRuleBtn.addEventListener('click', closeRuleModal);
+        elements.cancelRuleBtn.addEventListener('click', closeRuleModalHandler);
     }
     if (elements.ruleModal) {
         elements.ruleModal.addEventListener('click', (event) => {
             if (event.target === elements.ruleModal) {
-                closeRuleModal();
+                closeRuleModalHandler();
             }
         });
     }
@@ -115,138 +91,16 @@ function renderProviderSelect() {
     }).join('');
 }
 
-async function loadGlobalTempmailSettings() {
-    try {
-        const settings = await api.get('/settings/tempmail');
-        const baseUrl = settings.base_url || settings.api_url || '';
-        const enabled = settings.enabled !== false;
-
-        globalSelectionMode = settings.selection_mode || 'single';
-        globalSingleServiceId = settings.single_service_id ?? null;
-
-        if (elements.globalBaseUrl) {
-            elements.globalBaseUrl.value = baseUrl;
-        }
-        if (elements.globalEnabled) {
-            elements.globalEnabled.checked = enabled;
-        }
-        if (elements.globalSelectionMode) {
-            elements.globalSelectionMode.value = globalSelectionMode;
-        }
-
-        if (elements.globalBaseUrlText) {
-            elements.globalBaseUrlText.textContent = baseUrl || '-';
-        }
-        if (elements.globalEnabledText) {
-            elements.globalEnabledText.textContent = enabled ? '启用' : '关闭';
-        }
-
-        renderSingleServiceOptions();
-        updateSingleServiceVisibility();
-    } catch (error) {
-        toast.error(`加载全局配置失败: ${error.message}`);
-    }
-}
-
-function updateSingleServiceVisibility() {
-    if (!elements.globalSingleServiceGroup) {
-        return;
-    }
-    elements.globalSingleServiceGroup.style.display = globalSelectionMode === 'single' ? 'block' : 'none';
-}
-
-function renderSingleServiceOptions() {
-    if (!elements.globalSingleServiceId) {
-        return;
-    }
-
-    const selectableRules = tempmailRules.filter((service) => service.enabled);
-
-    const options = [
-        '<option value="">自动选择首个启用规则</option>',
-        ...selectableRules.map((service) => {
-            const providerLabel = service.provider_label || service.provider || 'Tempmail';
-            return `<option value="${service.id}">${escapeHtml(`${service.name} / ${providerLabel}`)}</option>`;
-        }),
-    ];
-    elements.globalSingleServiceId.innerHTML = options.join('');
-
-    if (globalSingleServiceId && selectableRules.some((service) => service.id === globalSingleServiceId)) {
-        elements.globalSingleServiceId.value = String(globalSingleServiceId);
-    } else {
-        elements.globalSingleServiceId.value = '';
-    }
-}
-
-async function handleSaveGlobalTempmailSettings(event) {
-    event.preventDefault();
-
-    const baseUrl = elements.globalBaseUrl?.value?.trim() || '';
-    const enabled = Boolean(elements.globalEnabled?.checked);
-    const selectionMode = elements.globalSelectionMode?.value || 'single';
-    const rawSingleServiceId = elements.globalSingleServiceId?.value || '';
-    const singleServiceId = rawSingleServiceId ? Number(rawSingleServiceId) : null;
-
-    if (!baseUrl) {
-        toast.error('默认 API 地址不能为空');
-        return;
-    }
-
-    try {
-        await api.post('/settings/tempmail', {
-            base_url: baseUrl,
-            enabled,
-            selection_mode: selectionMode,
-            single_service_id: selectionMode === 'single' ? singleServiceId : null,
-        });
-        toast.success('全局临时邮箱配置已保存');
-        await Promise.all([loadGlobalTempmailSettings(), loadTempmailRules()]);
-    } catch (error) {
-        toast.error(`保存失败: ${error.message}`);
-    }
-}
-
-async function handleTestGlobalTempmail() {
-    const baseUrl = elements.globalBaseUrl?.value?.trim() || '';
-    if (!baseUrl) {
-        toast.error('请先填写默认 API 地址');
-        return;
-    }
-
-    const button = elements.testGlobalTempmailBtn;
-    if (button) {
-        button.disabled = true;
-        button.textContent = '测试中...';
-    }
-
-    try {
-        const result = await api.post('/email-services/test-tempmail', { base_url: baseUrl, provider: 'tempmail_lol' });
-        if (result.success) {
-            toast.success(result.message || '连接正常');
-        } else {
-            toast.error(result.message || '连接失败');
-        }
-    } catch (error) {
-        toast.error(`测试失败: ${error.message}`);
-    } finally {
-        if (button) {
-            button.disabled = false;
-            button.textContent = '🔌 测试全局连接';
-        }
-    }
-}
-
 async function loadTempmailRules() {
     try {
         const result = await api.get('/email-services?service_type=tempmail');
         tempmailRules = Array.isArray(result.services) ? result.services : [];
         renderTempmailRulesTable();
         updateStats();
-        renderSingleServiceOptions();
     } catch (error) {
         elements.rulesTable.innerHTML = `
             <tr>
-                <td colspan="8">
+                <td colspan="7">
                     <div class="empty-state">
                         <div class="empty-state-icon">❌</div>
                         <div class="empty-state-title">加载失败</div>
@@ -276,11 +130,11 @@ function renderTempmailRulesTable() {
     if (tempmailRules.length === 0) {
         elements.rulesTable.innerHTML = `
             <tr>
-                <td colspan="8">
+                <td colspan="7">
                     <div class="empty-state">
                         <div class="empty-state-icon">📭</div>
                         <div class="empty-state-title">暂无临时邮箱规则</div>
-                        <div class="empty-state-description">点击“添加规则”配置邮箱调用方式和参数。</div>
+                        <div class="empty-state-description">点击"添加规则"配置邮箱调用方式和参数。</div>
                     </div>
                 </td>
             </tr>
@@ -326,7 +180,6 @@ function renderTempmailRulesTable() {
                 <td style="font-size: 0.8125rem; color: var(--text-secondary);">${summaryParts.join(' / ')}</td>
                 <td>${item.priority ?? 0}</td>
                 <td>${item.enabled ? '<span class="status-badge active">启用</span>' : '<span class="status-badge disabled">禁用</span>'}</td>
-                <td>${format.date(item.last_used)}</td>
                 <td>
                     <div style="display:flex;gap:4px;align-items:center;white-space:nowrap;flex-wrap:wrap;">
                         ${editButton}
@@ -369,7 +222,7 @@ function openRuleModal(rule = null) {
     elements.ruleModal.classList.add('active');
 }
 
-function closeRuleModal() {
+function closeRuleModalHandler() {
     elements.ruleModal.classList.remove('active');
     elements.ruleForm.reset();
     elements.ruleId.value = '';
@@ -433,7 +286,7 @@ async function handleSaveRule(event) {
             toast.success('规则已创建');
         }
 
-        closeRuleModal();
+        closeRuleModalHandler();
         await loadTempmailRules();
     } catch (error) {
         toast.error(`保存失败: ${error.message}`);
@@ -471,7 +324,7 @@ async function toggleTempmailRule(ruleId, enabled) {
     try {
         await api.post(`/email-services/${ruleId}/${endpoint}`);
         toast.success(enabled ? '规则已启用' : '规则已禁用');
-        await Promise.all([loadGlobalTempmailSettings(), loadTempmailRules()]);
+        await loadTempmailRules();
     } catch (error) {
         toast.error(`操作失败: ${error.message}`);
     }

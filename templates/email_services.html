@@ -9,119 +9,103 @@
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📮</text></svg>">
 </head>
 <body>
-    <div class="container">
-        <nav class="navbar">
-            <div class="nav-brand">
-                <h1>OpenAI 注册系统</h1>
+    <!-- 新布局：左侧导航栏 Shell -->
+    <div class="app-shell">
+        <!-- 左侧导航栏 -->
+        <aside class="sidebar">
+            <div class="sidebar-brand">
+                <div class="sidebar-brand-icon">🚀</div>
+                <span class="sidebar-brand-text">OpenAI 注册</span>
             </div>
-            <div class="nav-links">
-                <a href="/" class="nav-link">注册</a>
-                <a href="/accounts" class="nav-link">账号管理</a>
-                <a href="/email-services" class="nav-link active">邮箱服务</a>
-                <a href="/payment" class="nav-link">支付</a>
-                <a href="/settings" class="nav-link">设置</a>
-                <a href="/logout" class="nav-link">退出</a>
+            
+            <nav class="sidebar-nav">
+                <div class="sidebar-section">
+                    <div class="sidebar-section-title">控制台</div>
+                    <a href="/" class="sidebar-link">
+                        <span class="sidebar-link-icon">📝</span>
+                        <span>注册</span>
+                    </a>
+                    <a href="/accounts" class="sidebar-link">
+                        <span class="sidebar-link-icon">📋</span>
+                        <span>账号管理</span>
+                    </a>
+                    <a href="/email-services" class="sidebar-link active">
+                        <span class="sidebar-link-icon">📮</span>
+                        <span>邮箱服务</span>
+                    </a>
+                </div>
+                
+                <div class="sidebar-section">
+                    <div class="sidebar-section-title">工具</div>
+                    <a href="/payment" class="sidebar-link">
+                        <span class="sidebar-link-icon">💳</span>
+                        <span>支付升级</span>
+                    </a>
+                    <a href="/settings" class="sidebar-link">
+                        <span class="sidebar-link-icon">⚙️</span>
+                        <span>系统设置</span>
+                    </a>
+                </div>
+            </nav>
+            
+            <div class="sidebar-footer">
+                <button type="button" class="theme-toggle-btn" onclick="theme.toggle()" title="切换主题">🌙</button>
+                <a href="/logout" class="logout-link">退出</a>
             </div>
-            <button type="button" class="theme-toggle" onclick="theme.toggle()" title="切换主题">🌙</button>
-        </nav>
+        </aside>
 
-        <main class="main-content">
-            <div class="page-header">
-                <h2>临时邮箱池管理</h2>
-                <p class="subtitle">支持多供应商调用方式、固定内置规则保护，以及单服务/多服务轮询模式。</p>
-            </div>
+        <!-- 主内容区 -->
+        <main class="main-wrapper">
+            <header class="page-header-bar">
+                <div class="page-title-section">
+                    <h1>📮 临时邮箱池</h1>
+                    <p>支持多供应商调用方式、固定内置规则保护，以及单服务/多服务轮询模式。</p>
+                </div>
+            </header>
 
-            <div class="stats-grid">
-                <div class="stat-card info">
-                    <div class="stat-value" id="rules-total">0</div>
-                    <div class="stat-label">规则总数</div>
+            <div class="page-content">
+                <div class="stats-grid">
+                    <div class="stat-card info">
+                        <div class="stat-value" id="rules-total">0</div>
+                        <div class="stat-label">规则总数</div>
+                    </div>
+                    <div class="stat-card success">
+                        <div class="stat-value" id="rules-enabled">0</div>
+                        <div class="stat-label">启用规则</div>
+                    </div>
                 </div>
-                <div class="stat-card success">
-                    <div class="stat-value" id="rules-enabled">0</div>
-                    <div class="stat-label">启用规则</div>
-                </div>
-                <div class="stat-card warning">
-                    <div class="stat-value" id="global-enabled-text">-</div>
-                    <div class="stat-label">全局开关</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value" id="global-base-url-text">-</div>
-                    <div class="stat-label">全局 API</div>
-                </div>
-            </div>
 
-            <div class="card">
-                <div class="card-header">
-                    <h3>🌐 全局临时邮箱配置</h3>
-                </div>
-                <div class="card-body">
-                    <form id="global-tempmail-form">
-                        <div class="form-group">
-                            <label for="global-base-url">默认 API 地址</label>
-                            <input type="text" id="global-base-url" name="base_url" placeholder="https://api.tempmail.lol/v2" required>
+                <div class="card">
+                    <div class="card-header">
+                        <h3>📮 临时邮箱规则列表</h3>
+                        <button type="button" class="btn btn-primary btn-sm" id="add-rule-btn">➕ 添加规则</button>
+                    </div>
+                    <div class="card-body" style="padding: 0;">
+                        <div class="table-container">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th style="width: 50px;">ID</th>
+                                        <th>规则名称</th>
+                                        <th style="width: 140px;">供应商</th>
+                                        <th>规则内容</th>
+                                        <th style="width: 60px;">优先级</th>
+                                        <th style="width: 70px;">状态</th>
+                                        <th style="width: 160px;">操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="tempmail-rules-table">
+                                    <tr>
+                                        <td colspan="7">
+                                            <div class="empty-state">
+                                                <div class="empty-state-icon">⏳</div>
+                                                <div class="empty-state-title">加载中...</div>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
                         </div>
-                        <div class="form-group">
-                            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
-                                <input type="checkbox" id="global-enabled"> 启用全局临时邮箱
-                            </label>
-                        </div>
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label for="global-selection-mode">服务选择模式</label>
-                                <select id="global-selection-mode" name="selection_mode">
-                                    <option value="single">单个模式（固定服务）</option>
-                                    <option value="multi">多个模式（轮询）</option>
-                                </select>
-                            </div>
-                            <div class="form-group" id="global-single-service-group">
-                                <label for="global-single-service-id">单个模式服务</label>
-                                <select id="global-single-service-id" name="single_service_id">
-                                    <option value="">自动选择首个启用规则</option>
-                                </select>
-                            </div>
-                        </div>
-                        <p class="hint" style="margin-top: -4px; margin-bottom: 8px; color: var(--text-muted);">
-                            多个模式会在已启用规则中按“最近最少使用 + 优先级”轮询。
-                        </p>
-                        <div class="form-actions">
-                            <button type="submit" class="btn btn-primary">💾 保存全局配置</button>
-                            <button type="button" class="btn btn-secondary" id="test-global-tempmail-btn">🔌 测试全局连接</button>
-                        </div>
-                    </form>
-                </div>
-            </div>
-
-            <div class="card">
-                <div class="card-header">
-                    <h3>📮 临时邮箱规则列表</h3>
-                    <button type="button" class="btn btn-primary btn-sm" id="add-rule-btn">➕ 添加规则</button>
-                </div>
-                <div class="card-body" style="padding: 0;">
-                    <div class="table-container">
-                        <table class="data-table">
-                            <thead>
-                                <tr>
-                                    <th style="width: 60px;">ID</th>
-                                    <th>规则名称</th>
-                                    <th style="width: 180px;">供应商</th>
-                                    <th>规则内容</th>
-                                    <th style="width: 80px;">优先级</th>
-                                    <th style="width: 100px;">状态</th>
-                                    <th style="width: 180px;">最后使用</th>
-                                    <th style="width: 260px;">操作</th>
-                                </tr>
-                            </thead>
-                            <tbody id="tempmail-rules-table">
-                                <tr>
-                                    <td colspan="8">
-                                        <div class="empty-state">
-                                            <div class="empty-state-icon">⏳</div>
-                                            <div class="empty-state-title">加载中...</div>
-                                        </div>
-                                    </td>
-                                </tr>
-                            </tbody>
-                        </table>
                     </div>
                 </div>
             </div>
@@ -129,7 +113,7 @@
     </div>
 
     <div class="modal" id="rule-modal">
-        <div class="modal-content" style="max-width: 640px;">
+        <div class="modal-content" style="max-width: 580px;">
             <div class="modal-header">
                 <h3 id="rule-modal-title">添加临时邮箱规则</h3>
                 <button type="button" class="modal-close" id="close-rule-modal">&times;</button>
@@ -180,7 +164,7 @@
                     </div>
 
                     <div class="form-group">
-                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                        <label style="display:flex;align-items:center;gap:var(--semi-spacing-2);cursor:pointer;">
                             <input type="checkbox" id="rule-enabled" checked> 启用该规则
                         </label>
                     </div>
