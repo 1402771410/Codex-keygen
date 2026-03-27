@@ -80,13 +80,8 @@ curl -L https://raw.githubusercontent.com/1402771410/Codex-keygen/main/scripts/i
 - 再次执行同一条命令：自动完成系统升级。
 - 安装流程会提示填写监听地址、端口、登录用户名、登录密码（Win/Linux/macOS/Docker 均一致）。
 - 若缺少依赖（如 git/python/pip/docker），会先征求同意后自动安装。
-- Linux 下如果检测到 Docker 且使用 auto 模式，会提示你在 **Docker / 本地** 之间自行选择。
+- Linux 环境下会明确提示你在 **本地 / Docker** 之间自行选择，脚本不会替你自动决定。
 - 安装完成后可直接输入 `keygen` 打开管理面板（无需进入项目目录）。
-- 如需强制 Docker：
-
-```bash
-curl -L https://raw.githubusercontent.com/1402771410/Codex-keygen/main/scripts/install_auto.sh | bash -s -- install --mode docker
-```
 
 ### 2. 一行命令卸载
 
@@ -170,6 +165,8 @@ curl -L https://raw.githubusercontent.com/1402771410/Codex-keygen/main/scripts/i
 - 设置开机自启/关闭开机自启
 - 文件目录信息展示
 
+> 在 Linux 上，安装/更新时会先让你选择本地或 Docker；升级仍复用同一条安装命令。
+
 ---
 
 ## webui.py 启动参数
@@ -215,28 +212,6 @@ python webui.py --host 0.0.0.0 --port 1455 --access-username admin --access-pass
 ```bash
 export APP_DATABASE_URL="postgresql://user:password@host:5432/dbname"
 python webui.py
-```
-
----
-
-## Docker 模式（同一命令）
-
-安装/升级（Docker，同一命令）：
-
-```bash
-curl -L https://raw.githubusercontent.com/1402771410/Codex-keygen/main/scripts/install_auto.sh | bash -s -- install --mode docker
-```
-
-卸载（Docker）：
-
-```bash
-curl -L https://raw.githubusercontent.com/1402771410/Codex-keygen/main/scripts/install_auto.sh | bash -s -- uninstall --mode docker
-```
-
-深度卸载（Docker，清理卷）：
-
-```bash
-curl -L https://raw.githubusercontent.com/1402771410/Codex-keygen/main/scripts/install_auto.sh | bash -s -- uninstall --mode docker --purge
 ```
 
 ---

@@ -17,6 +17,10 @@ if [[ "${1:-}" == "install" || "${1:-}" == "upgrade" || "${1:-}" == "uninstall" 
 fi
 
 EXTRA_ARGS=("$@")
+TTY_INTERACTIVE=0
+if [[ -r /dev/tty ]]; then
+    TTY_INTERACTIVE=1
+fi
 
 say() {
     echo "[keygen-auto] $*"
@@ -140,6 +144,31 @@ install_dependency_macos() {
     brew install "$dep"
 }
 
+install_dependency_windows() {
+    local dep="$1"
+    if ! command -v winget >/dev/null 2>&1; then
+        return 1
+    fi
+
+    local package_id=""
+    case "$dep" in
+        git)
+            package_id="Git.Git"
+            ;;
+        python|python3)
+            package_id="Python.Python.3.12"
+            ;;
+        docker)
+            package_id="Docker.DockerDesktop"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    winget install --id "$package_id" -e --accept-source-agreements --accept-package-agreements
+}
+
 ensure_command() {
     local command_name="$1"
     local install_dep_linux="$2"
@@ -162,12 +191,50 @@ ensure_command() {
         install_dependency_linux "$install_dep_linux" || ok=0
     elif [[ "$os_name" == "macos" ]]; then
         install_dependency_macos "$install_dep_macos" || ok=0
+    elif [[ "$os_name" == "windows" ]]; then
+        install_dependency_windows "$command_name" || ok=0
     else
         ok=0
     fi
 
     if [[ "$ok" != "1" ]] && ! command -v "$command_name" >/dev/null 2>&1; then
         echo "自动安装 $command_name 失败，请手工安装后重试。"
+        exit 1
+    fi
+}
+
+ensure_python_runtime() {
+    if resolve_python; then
+        return 0
+    fi
+
+    say "未检测到 Python 3 运行环境"
+    if ! ask_yes_no "是否自动安装 Python 3 ?" 1; then
+        echo "用户取消安装 Python，流程终止。"
+        exit 1
+    fi
+
+    local os_name
+    os_name="$(detect_os)"
+    local ok=1
+    if [[ "$os_name" == "linux" ]]; then
+        install_dependency_linux "python3" || ok=0
+        install_dependency_linux "python3-pip" || true
+    elif [[ "$os_name" == "macos" ]]; then
+        install_dependency_macos "python" || ok=0
+    elif [[ "$os_name" == "windows" ]]; then
+        install_dependency_windows "python3" || ok=0
+    else
+        ok=0
+    fi
+
+    if [[ "$ok" != "1" ]] && ! resolve_python; then
+        echo "自动安装 Python 失败，请手动安装 Python 3.10+ 后重试。"
+        exit 1
+    fi
+
+    if ! resolve_python; then
+        echo "未检测到 Python（需 Python 3.10+）"
         exit 1
     fi
 }
@@ -244,7 +311,17 @@ EOF
     say "已安装管理命令：$launcher_path"
     if [[ ":$PATH:" != *":$bin_dir:"* ]]; then
         echo "提示：当前 PATH 不含 $bin_dir"
-        echo "请执行：export PATH=\"$bin_dir:\$PATH\""
+        if [[ "$TTY_INTERACTIVE" == "1" ]] && ask_yes_no "是否自动写入 ~/.bashrc 和 ~/.zshrc 以加入 PATH？" 1; then
+            for profile_file in "$HOME/.bashrc" "$HOME/.zshrc"; do
+                touch "$profile_file"
+                if ! grep -Fq "export PATH=\"$bin_dir:\$PATH\"" "$profile_file"; then
+                    printf '\nexport PATH="%s:$PATH"\n' "$bin_dir" >> "$profile_file"
+                fi
+            done
+            echo "已写入 PATH 配置，重新打开终端后可直接使用 keygen。"
+        else
+            echo "请执行：export PATH=\"$bin_dir:\$PATH\""
+        fi
     fi
 
     if command -v keygen >/dev/null 2>&1; then
@@ -260,27 +337,57 @@ should_use_interactive() {
     fi
 
     # 管道执行脚本时 stdin 通常不可读，优先尝试接管 /dev/tty
-    if [[ -r /dev/tty ]]; then
+    if [[ "$TTY_INTERACTIVE" == "1" ]]; then
         return 0
     fi
 
     return 1
 }
 
+ensure_linux_mode_choice_arg() {
+    if [[ "$(detect_os)" != "linux" ]]; then
+        return 0
+    fi
+
+    if has_arg "--mode" "${EXTRA_ARGS[@]}"; then
+        return 0
+    fi
+
+    if [[ "$TTY_INTERACTIVE" != "1" ]]; then
+        say "Linux 环境下未显式指定 --mode，且当前非交互终端。"
+        say "请显式指定：--mode local 或 --mode docker"
+        exit 1
+    fi
+
+    local choice=""
+    while true; do
+        printf "Linux 安装模式请选择 [local/docker]: " > /dev/tty
+        IFS= read -r choice < /dev/tty || true
+        choice="${choice,,}"
+        choice="${choice// /}"
+        if [[ "$choice" == "local" || "$choice" == "docker" ]]; then
+            EXTRA_ARGS+=("--mode" "$choice")
+            say "已选择 Linux 安装模式：$choice"
+            return 0
+        fi
+        echo "请输入 local 或 docker" > /dev/tty
+    done
+}
+
 build_default_args() {
     local args=()
 
     if ! has_arg "--mode" "${EXTRA_ARGS[@]}"; then
-        args+=("--mode" "auto")
+        if [[ "$(detect_os)" == "linux" ]]; then
+            # Linux 必须由用户显式选择 local/docker。
+            :
+        else
+            args+=("--mode" "auto")
+        fi
     fi
 
-    if [[ "$ACTION" != "uninstall" ]]; then
-        # 二次执行默认静默更新，避免重复采集配置；可通过显式参数覆盖。
-        if [[ -f "$INSTALL_DIR/runtime-config.json" ]] && ! has_arg "--non-interactive" "${EXTRA_ARGS[@]}"; then
-            args+=("--non-interactive")
-        fi
-
-        if [[ "$(uname -s 2>/dev/null || true)" == "Linux" ]] && has_arg "--non-interactive" "${args[@]}" "${EXTRA_ARGS[@]}"; then
+    if [[ "$ACTION" != "uninstall" ]] && has_arg "--non-interactive" "${args[@]}" "${EXTRA_ARGS[@]}"; then
+        if [[ "$(detect_os)" == "linux" ]]; then
             args+=("--yes-install-docker")
         fi
     fi
@@ -290,15 +397,16 @@ build_default_args() {
 
 main() {
     ensure_command "git" "git" "git"
-    ensure_command "python3" "python3" "python"
+    ensure_python_runtime
 
     ensure_repo
     cd "$INSTALL_DIR"
 
-    if ! resolve_python; then
-        echo "未检测到 Python（需 Python 3.10+）"
-        exit 1
+    if [[ "$ACTION" != "uninstall" ]]; then
+        ensure_linux_mode_choice_arg
     fi
+
+    ensure_python_runtime
 
     # upgrade 与 install 共用同一入口。
     local command_action="$ACTION"
