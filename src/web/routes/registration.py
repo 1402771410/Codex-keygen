@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from ...database import crud
 from ...database.session import get_db
 from ...database.models import RegistrationTask, Proxy
-from ...database.tempmail_bootstrap import ensure_builtin_tempmail_services, get_tempmail_runtime_state
+from ...database.tempmail_bootstrap import ensure_builtin_tempmail_services, get_tempmail_runtime_state, is_global_tempmail_service
 from ...core.register import RegistrationEngine, RegistrationResult
 from ...services import EmailServiceFactory, EmailServiceType
 from ...services.tempmail_catalog import build_tempmail_config, get_tempmail_provider_meta
@@ -381,6 +381,7 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
             selected_config = dict(cast(dict, selected_service.config or {}))
             provider = str(selected_service.provider or selected_config.get("provider") or "tempmail_lol")
             selected_config["provider"] = provider
+            selected_is_global_tempmail = is_global_tempmail_service(selected_service)
             config = _normalize_email_service_config(service_type, selected_config, actual_proxy_url)
             crud.update_registration_task(db, task_uuid, email_service_id=selected_service.id)
             provider_meta = get_tempmail_provider_meta(provider)
@@ -401,7 +402,9 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                 email_service=email_service,
                 proxy_url=actual_proxy_url,
                 callback_logger=log_callback,
-                task_uuid=task_uuid
+                task_uuid=task_uuid,
+                use_global_tempmail_limit=selected_is_global_tempmail,
+                check_cancelled=task_manager.create_check_cancelled_callback(task_uuid),
             )
 
             # 执行注册

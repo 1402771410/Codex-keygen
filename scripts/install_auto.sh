@@ -296,6 +296,11 @@ install_keygen_launcher() {
         cat > "$launcher_path" <<EOF
 @echo off
 setlocal
+set "_OLD_CP="
+for /f "tokens=2 delims=: " %%a in ('chcp') do set "_OLD_CP=%%a"
+chcp 65001 >nul
+set "PYTHONUTF8=1"
+set "PYTHONIOENCODING=utf-8"
 set "KEYGEN_HOME=$install_dir_win"
 set "KEYGEN_LAUNCHER=keygen"
 if exist "%KEYGEN_HOME%\.venv\Scripts\python.exe" (
@@ -308,6 +313,7 @@ if exist "%KEYGEN_HOME%\.venv\Scripts\python.exe" (
         python "%KEYGEN_HOME%\scripts\keygen.py" %*
     )
 )
+if defined _OLD_CP chcp %_OLD_CP% >nul
 EOF
 
         say "已安装 Windows 管理命令：$launcher_path"
@@ -349,6 +355,23 @@ export KEYGEN_LAUNCHER=keygen
 EOF
     chmod +x "$launcher_path"
 
+    # 尝试安装全局命令，避免 ~/.local/bin 尚未生效导致 keygen 找不到。
+    local global_bin="/usr/local/bin/keygen"
+    if [[ "$os_name" == "linux" || "$os_name" == "macos" ]]; then
+        if [[ -w "/usr/local/bin" ]]; then
+            ln -sf "$launcher_path" "$global_bin"
+            say "已创建全局命令：$global_bin"
+        elif command -v sudo >/dev/null 2>&1 && [[ "$TTY_INTERACTIVE" == "1" ]]; then
+            if ask_yes_no "是否使用 sudo 安装全局命令到 /usr/local/bin/keygen？" 1; then
+                if sudo ln -sf "$launcher_path" "$global_bin"; then
+                    say "已创建全局命令：$global_bin"
+                else
+                    say "创建 /usr/local/bin/keygen 失败，将继续使用 ~/.local/bin/keygen"
+                fi
+            fi
+        fi
+    fi
+
     say "已安装管理命令：$launcher_path"
     if [[ ":$PATH:" != *":$bin_dir:"* ]]; then
         echo "提示：当前 PATH 不含 $bin_dir"
@@ -369,6 +392,7 @@ EOF
         say "现在可直接运行：keygen"
     else
         say "安装完成后可运行：$launcher_path"
+        say "如当前终端仍提示找不到 keygen，请执行：export PATH=\"$bin_dir:\$PATH\""
     fi
 }
 

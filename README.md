@@ -79,7 +79,7 @@ curl -L https://raw.githubusercontent.com/1402771410/Codex-keygen/main/scripts/i
 Windows CMD / PowerShell：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$tmp=Join-Path $env:TEMP 'install_auto.ps1'; iwr -useb 'https://raw.githubusercontent.com/1402771410/Codex-keygen/main/scripts/install_auto.ps1' | Set-Content -Encoding UTF8 $tmp; & $tmp"
+chcp 65001>nul && powershell -NoProfile -ExecutionPolicy Bypass -Command "$tmp=Join-Path $env:TEMP 'install_auto.ps1'; iwr -useb 'https://raw.githubusercontent.com/1402771410/Codex-keygen/main/scripts/install_auto.ps1' | Set-Content -Encoding UTF8 $tmp; & $tmp"
 ```
 
 说明：
@@ -90,6 +90,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "$tmp=Join-Path $env:TEMP
 - 若缺少依赖（如 git/python/pip/docker），会先征求同意后自动安装。
 - Linux 环境下会给出编号选项让你选择：`1) 本地部署` / `2) Docker 部署`，脚本不会替你自动决定。
 - 安装完成后可直接输入 `keygen` 打开管理面板（无需进入项目目录）。
+- Linux/macOS 安装后会优先尝试创建 `/usr/local/bin/keygen` 全局命令，减少 PATH 未生效导致的 `command not found`。
 
 ### 2. 一行命令卸载
 
@@ -102,7 +103,7 @@ curl -L https://raw.githubusercontent.com/1402771410/Codex-keygen/main/scripts/i
 Windows CMD / PowerShell：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$tmp=Join-Path $env:TEMP 'install_auto.ps1'; iwr -useb 'https://raw.githubusercontent.com/1402771410/Codex-keygen/main/scripts/install_auto.ps1' | Set-Content -Encoding UTF8 $tmp; & $tmp -Action uninstall"
+chcp 65001>nul && powershell -NoProfile -ExecutionPolicy Bypass -Command "$tmp=Join-Path $env:TEMP 'install_auto.ps1'; iwr -useb 'https://raw.githubusercontent.com/1402771410/Codex-keygen/main/scripts/install_auto.ps1' | Set-Content -Encoding UTF8 $tmp; & $tmp -Action uninstall"
 ```
 
 深度清理（删除 `.venv` / `.env` / `.env.docker`；Docker 模式清理卷）：
@@ -112,7 +113,7 @@ curl -L https://raw.githubusercontent.com/1402771410/Codex-keygen/main/scripts/i
 ```
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$tmp=Join-Path $env:TEMP 'install_auto.ps1'; iwr -useb 'https://raw.githubusercontent.com/1402771410/Codex-keygen/main/scripts/install_auto.ps1' | Set-Content -Encoding UTF8 $tmp; & $tmp -Action uninstall -Purge"
+chcp 65001>nul && powershell -NoProfile -ExecutionPolicy Bypass -Command "$tmp=Join-Path $env:TEMP 'install_auto.ps1'; iwr -useb 'https://raw.githubusercontent.com/1402771410/Codex-keygen/main/scripts/install_auto.ps1' | Set-Content -Encoding UTF8 $tmp; & $tmp -Action uninstall -Purge"
 ```
 
 ### 3. 启动 Web UI（本地模式）
@@ -166,8 +167,8 @@ curl -L https://raw.githubusercontent.com/1402771410/Codex-keygen/main/scripts/i
 Windows CMD / PowerShell：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$tmp=Join-Path $env:TEMP 'install_auto.ps1'; iwr -useb 'https://raw.githubusercontent.com/1402771410/Codex-keygen/main/scripts/install_auto.ps1' | Set-Content -Encoding UTF8 $tmp; & $tmp"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$tmp=Join-Path $env:TEMP 'install_auto.ps1'; iwr -useb 'https://raw.githubusercontent.com/1402771410/Codex-keygen/main/scripts/install_auto.ps1' | Set-Content -Encoding UTF8 $tmp; & $tmp -Action uninstall"
+chcp 65001>nul && powershell -NoProfile -ExecutionPolicy Bypass -Command "$tmp=Join-Path $env:TEMP 'install_auto.ps1'; iwr -useb 'https://raw.githubusercontent.com/1402771410/Codex-keygen/main/scripts/install_auto.ps1' | Set-Content -Encoding UTF8 $tmp; & $tmp"
+chcp 65001>nul && powershell -NoProfile -ExecutionPolicy Bypass -Command "$tmp=Join-Path $env:TEMP 'install_auto.ps1'; iwr -useb 'https://raw.githubusercontent.com/1402771410/Codex-keygen/main/scripts/install_auto.ps1' | Set-Content -Encoding UTF8 $tmp; & $tmp -Action uninstall"
 ```
 
 > 第一条命令重复执行即可完成升级；无需单独再记一条升级命令。

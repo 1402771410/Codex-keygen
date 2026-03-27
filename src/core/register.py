@@ -9,6 +9,8 @@ import time
 import logging
 import secrets
 import string
+from collections import deque
+from threading import Lock
 from typing import Optional, Dict, Any, Tuple, Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -34,6 +36,12 @@ from ..config.settings import get_settings
 
 
 logger = logging.getLogger(__name__)
+
+# 全局临时邮箱限流：5 分钟最多创建 25 个邮箱地址
+GLOBAL_TEMPMAIL_LIMIT_WINDOW_SECONDS = 5 * 60
+GLOBAL_TEMPMAIL_LIMIT_MAX_CREATES = 25
+_global_tempmail_create_timestamps: deque[float] = deque()
+_global_tempmail_limit_lock = Lock()
 
 
 @dataclass
@@ -105,7 +113,9 @@ class RegistrationEngine:
         email_service: BaseEmailService,
         proxy_url: Optional[str] = None,
         callback_logger: Optional[Callable[[str], None]] = None,
-        task_uuid: Optional[str] = None
+        task_uuid: Optional[str] = None,
+        use_global_tempmail_limit: bool = False,
+        check_cancelled: Optional[Callable[[], bool]] = None,
     ):
         """
         初始化注册引擎
@@ -115,11 +125,15 @@ class RegistrationEngine:
             proxy_url: 代理 URL
             callback_logger: 日志回调函数
             task_uuid: 任务 UUID（用于数据库记录）
+            use_global_tempmail_limit: 是否启用全局临时邮箱限流
+            check_cancelled: 检查任务取消状态回调
         """
         self.email_service = email_service
         self.proxy_url = proxy_url
         self.callback_logger = callback_logger or (lambda msg: logger.info(msg))
         self.task_uuid = task_uuid
+        self.use_global_tempmail_limit = bool(use_global_tempmail_limit)
+        self.check_cancelled = check_cancelled
 
         # 创建 HTTP 客户端
         self.http_client = OpenAIHTTPClient(proxy_url=proxy_url)
@@ -145,6 +159,64 @@ class RegistrationEngine:
         self.logs: list = []
         self._otp_sent_at: Optional[float] = None  # OTP 发送时间戳
         self._is_existing_account: bool = False  # 是否为已注册账号（用于自动登录）
+
+    def _is_cancelled(self) -> bool:
+        """检查任务是否已取消。"""
+        if not self.check_cancelled:
+            return False
+
+        try:
+            return bool(self.check_cancelled())
+        except Exception as exc:
+            logger.warning(f"检查任务取消状态失败: {exc}")
+            return False
+
+    def _reserve_global_tempmail_slot(self) -> int:
+        """
+        尝试预留全局临时邮箱创建配额。
+
+        Returns:
+            int: 0 表示可立即创建；>0 表示需等待的秒数。
+        """
+        now = time.time()
+        window_start = now - GLOBAL_TEMPMAIL_LIMIT_WINDOW_SECONDS
+
+        with _global_tempmail_limit_lock:
+            while _global_tempmail_create_timestamps and _global_tempmail_create_timestamps[0] <= window_start:
+                _global_tempmail_create_timestamps.popleft()
+
+            if len(_global_tempmail_create_timestamps) < GLOBAL_TEMPMAIL_LIMIT_MAX_CREATES:
+                _global_tempmail_create_timestamps.append(now)
+                return 0
+
+            first_timestamp = _global_tempmail_create_timestamps[0]
+            wait_seconds = int(max(1, first_timestamp + GLOBAL_TEMPMAIL_LIMIT_WINDOW_SECONDS - now))
+            return wait_seconds
+
+    def _wait_for_global_tempmail_quota(self) -> bool:
+        """等待全局临时邮箱配额可用。"""
+        while True:
+            wait_seconds = self._reserve_global_tempmail_slot()
+            if wait_seconds <= 0:
+                return True
+
+            self._log(
+                f"全局临时邮箱达到限流（5 分钟最多 {GLOBAL_TEMPMAIL_LIMIT_MAX_CREATES} 个），"
+                f"等待冷却 {wait_seconds} 秒后重试...",
+                "warning",
+            )
+
+            remaining = wait_seconds
+            while remaining > 0:
+                if self._is_cancelled():
+                    self._log("任务已取消，终止全局临时邮箱冷却等待", "warning")
+                    return False
+
+                sleep_seconds = min(remaining, 5)
+                time.sleep(sleep_seconds)
+                remaining -= sleep_seconds
+
+            self._log("全局临时邮箱冷却结束，继续创建邮箱")
 
     def _log(self, message: str, level: str = "info"):
         """记录日志"""
@@ -189,6 +261,10 @@ class RegistrationEngine:
     def _create_email(self) -> bool:
         """创建邮箱"""
         try:
+            if self.use_global_tempmail_limit:
+                if not self._wait_for_global_tempmail_quota():
+                    return False
+
             self._log(f"正在创建 {self.email_service.service_type.value} 邮箱...")
             self.email_info = self.email_service.create_email()
 

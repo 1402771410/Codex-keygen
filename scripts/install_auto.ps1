@@ -1,4 +1,4 @@
-param(
+﻿param(
     [ValidateSet("install", "upgrade", "uninstall")]
     [string]$Action = "install",
     [ValidateSet("auto", "docker", "local")]
@@ -8,6 +8,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+$OutputEncoding = [Console]::OutputEncoding
 
 $RepoUrl = if ($env:KEYGEN_REPO_URL) { $env:KEYGEN_REPO_URL } else { "https://github.com/1402771410/Codex-keygen.git" }
 $RepoBranch = if ($env:KEYGEN_REPO_BRANCH) { $env:KEYGEN_REPO_BRANCH } else { "main" }
@@ -125,6 +127,11 @@ function Install-KeygenLauncher {
     $content = @"
 @echo off
 setlocal
+set "_OLD_CP="
+for /f "tokens=2 delims=: " %%a in ('chcp') do set "_OLD_CP=%%a"
+chcp 65001 >nul
+set "PYTHONUTF8=1"
+set "PYTHONIOENCODING=utf-8"
 set "KEYGEN_HOME=$normalizedInstallDir"
 set "KEYGEN_LAUNCHER=keygen"
 if exist "%KEYGEN_HOME%\.venv\Scripts\python.exe" (
@@ -137,6 +144,7 @@ if exist "%KEYGEN_HOME%\.venv\Scripts\python.exe" (
         python "%KEYGEN_HOME%\scripts\keygen.py" %*
     )
 )
+if defined _OLD_CP chcp %_OLD_CP% >nul
 "@
 
     Set-Content -Path $launcherPath -Value $content -Encoding ASCII
