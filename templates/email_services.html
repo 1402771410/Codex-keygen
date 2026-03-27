@@ -76,6 +76,15 @@
                         </span>
                         <span>系统设置</span>
                     </a>
+                    <a href="/logs" class="sidebar-link">
+                        <span class="sidebar-link-icon nav-glyph" aria-hidden="true">
+                            <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M7 5H17C17.5523 5 18 5.44772 18 6V18L15 16L12 18L9 16L6 18V6C6 5.44772 6.44772 5 7 5Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+                                <path d="M9 9H15M9 12H14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                            </svg>
+                        </span>
+                        <span>日志中心</span>
+                    </a>
                 </div>
             </nav>
             
@@ -261,6 +270,28 @@
                 <div class="test-spinner" aria-hidden="true"></div>
                 <h3 id="test-progress-title">测试中，请等待...</h3>
                 <p id="test-progress-detail">正在创建邮箱并等待真实 OTP 验证，请勿关闭页面。</p>
+                <div class="test-stage-board" id="test-stage-board">
+                    <div class="test-stage-item" data-stage="prepare">
+                        <span class="test-stage-dot"></span>
+                        <span class="test-stage-label">准备测试环境</span>
+                    </div>
+                    <div class="test-stage-item" data-stage="create_email">
+                        <span class="test-stage-dot"></span>
+                        <span class="test-stage-label">创建临时邮箱</span>
+                    </div>
+                    <div class="test-stage-item" data-stage="request_openai">
+                        <span class="test-stage-dot"></span>
+                        <span class="test-stage-label">触发 OpenAI 验证邮件</span>
+                    </div>
+                    <div class="test-stage-item" data-stage="wait_otp">
+                        <span class="test-stage-dot"></span>
+                        <span class="test-stage-label">轮询收件箱等待 OTP</span>
+                    </div>
+                    <div class="test-stage-item" data-stage="otp_received">
+                        <span class="test-stage-dot"></span>
+                        <span class="test-stage-label">确认收到 OTP</span>
+                    </div>
+                </div>
             </div>
         </div>
     </div>

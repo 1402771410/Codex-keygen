@@ -30,19 +30,37 @@ const elements = {
     testProgressModal: document.getElementById('test-progress-modal'),
     testProgressTitle: document.getElementById('test-progress-title'),
     testProgressDetail: document.getElementById('test-progress-detail'),
+    testStageBoard: document.getElementById('test-stage-board'),
 };
 
 const fallbackProviders = [
     { value: 'tempmail_lol', label: 'Tempmail.lol', description: 'Token inbox 接口' },
-    { value: 'mail_tm', label: 'Mail.tm', description: 'JWT REST 接口' },
-    { value: 'mail_gw', label: 'Mail.gw', description: 'JWT REST 接口' },
-    { value: 'onesecmail', label: '1secmail', description: 'Query Action 接口' },
-    { value: 'guerrillamail', label: 'GuerrillaMail', description: 'Session Query 接口' },
 ];
 
 let tempmailRules = [];
 let providerOptions = [...fallbackProviders];
 const activeTests = new Set();
+
+const TEST_STAGE_ORDER = ['prepare', 'create_email', 'request_openai', 'wait_otp', 'otp_received'];
+const TEST_STAGE_ALIAS = {
+    probe_exception: 'prepare',
+    bootstrap_failed: 'prepare',
+    create_email_failed: 'create_email',
+    request_otp_failed: 'request_openai',
+    wait_otp_timeout: 'wait_otp',
+    wait_otp_failed: 'wait_otp',
+    otp_received: 'otp_received',
+};
+const TEST_STAGE_HINTS = {
+    prepare: '初始化测试资源并检查服务配置...',
+    create_email: '正在创建临时邮箱地址...',
+    request_openai: '正在触发 OpenAI OTP 邮件发送...',
+    wait_otp: '正在轮询收件箱等待验证码邮件...',
+    otp_received: '已确认收到 OTP，正在保存结果...',
+};
+
+let testStageAutoTimer = null;
+let testStageAutoIndex = 0;
 
 document.addEventListener('DOMContentLoaded', async () => {
     bindEvents();
@@ -180,6 +198,9 @@ function showTestProgressModal(ruleName) {
     if (elements.testProgressDetail) {
         elements.testProgressDetail.textContent = `正在验证「${displayName}」并等待真实 OTP 验证，请勿关闭页面。`;
     }
+    resetTestStageBoard();
+    updateTestStageBoard('prepare', 'running');
+    startTestStageAutoProgress();
     elements.testProgressModal.classList.add('active');
 }
 
@@ -187,7 +208,127 @@ function hideTestProgressModal() {
     if (!elements.testProgressModal) {
         return;
     }
+    stopTestStageAutoProgress();
     elements.testProgressModal.classList.remove('active');
+}
+
+function resetTestStageBoard() {
+    if (!elements.testStageBoard) {
+        return;
+    }
+    const items = elements.testStageBoard.querySelectorAll('.test-stage-item');
+    items.forEach((item) => {
+        item.classList.remove('is-pending', 'is-running', 'is-success', 'is-error');
+        item.classList.add('is-pending');
+    });
+    testStageAutoIndex = 0;
+}
+
+function normalizeTestStage(stage) {
+    const normalized = String(stage || '').trim().toLowerCase();
+    if (!normalized) {
+        return 'wait_otp';
+    }
+    if (TEST_STAGE_ORDER.includes(normalized)) {
+        return normalized;
+    }
+    if (TEST_STAGE_ALIAS[normalized]) {
+        return TEST_STAGE_ALIAS[normalized];
+    }
+    if (normalized.includes('otp')) {
+        return normalized.includes('receive') ? 'otp_received' : 'wait_otp';
+    }
+    if (normalized.includes('create')) {
+        return 'create_email';
+    }
+    if (normalized.includes('openai') || normalized.includes('request')) {
+        return 'request_openai';
+    }
+    return 'prepare';
+}
+
+function updateTestProgressDetail(text) {
+    if (!elements.testProgressDetail) {
+        return;
+    }
+    elements.testProgressDetail.textContent = text;
+}
+
+function updateTestStageBoard(stage, status) {
+    if (!elements.testStageBoard) {
+        return;
+    }
+
+    const normalizedStage = normalizeTestStage(stage);
+    const stageIndex = TEST_STAGE_ORDER.indexOf(normalizedStage);
+    const items = elements.testStageBoard.querySelectorAll('.test-stage-item');
+    items.forEach((item) => {
+        const itemStage = String(item.dataset.stage || '');
+        const itemIndex = TEST_STAGE_ORDER.indexOf(itemStage);
+
+        item.classList.remove('is-pending', 'is-running', 'is-success', 'is-error');
+
+        if (itemIndex < 0 || stageIndex < 0) {
+            item.classList.add('is-pending');
+            return;
+        }
+
+        if (itemIndex < stageIndex) {
+            item.classList.add('is-success');
+            return;
+        }
+
+        if (itemIndex > stageIndex) {
+            item.classList.add('is-pending');
+            return;
+        }
+
+        if (status === 'success') {
+            item.classList.add('is-success');
+        } else if (status === 'error') {
+            item.classList.add('is-error');
+        } else {
+            item.classList.add('is-running');
+        }
+    });
+}
+
+function startTestStageAutoProgress() {
+    stopTestStageAutoProgress();
+    testStageAutoIndex = 0;
+    testStageAutoTimer = window.setInterval(() => {
+        const safeIndex = Math.min(testStageAutoIndex, TEST_STAGE_ORDER.length - 1);
+        const stage = TEST_STAGE_ORDER[safeIndex];
+        updateTestStageBoard(stage, 'running');
+        updateTestProgressDetail(TEST_STAGE_HINTS[stage] || '测试进行中，请稍候...');
+
+        if (testStageAutoIndex < TEST_STAGE_ORDER.length - 2) {
+            testStageAutoIndex += 1;
+        }
+    }, 1600);
+}
+
+function stopTestStageAutoProgress() {
+    if (!testStageAutoTimer) {
+        return;
+    }
+    window.clearInterval(testStageAutoTimer);
+    testStageAutoTimer = null;
+}
+
+function extractStageFromMessage(message) {
+    const text = String(message || '');
+    const match = text.match(/^\[(?<stage>[a-zA-Z0-9_]+)]/);
+    if (!match?.groups?.stage) {
+        return null;
+    }
+    return normalizeTestStage(match.groups.stage);
+}
+
+function sleep(ms) {
+    return new Promise((resolve) => {
+        window.setTimeout(resolve, ms);
+    });
 }
 
 async function loadTempmailRules() {
@@ -454,15 +595,29 @@ async function testTempmailRule(ruleId) {
     try {
         const result = await api.post(`/email-services/${ruleId}/test`);
         const persistedMessage = result?.details?.persisted_message || result?.message || '';
+        const resultStage = normalizeTestStage(result?.stage || extractStageFromMessage(persistedMessage));
         if (result.success) {
+            stopTestStageAutoProgress();
+            updateTestStageBoard(resultStage, 'success');
+            if (resultStage !== 'otp_received') {
+                updateTestStageBoard('otp_received', 'success');
+            }
+            updateTestProgressDetail(persistedMessage || TEST_STAGE_HINTS.otp_received);
             toast.success(persistedMessage || '规则测试通过，已可用于启用');
         } else {
+            stopTestStageAutoProgress();
+            updateTestStageBoard(resultStage, 'error');
+            updateTestProgressDetail(persistedMessage || result.message || '规则测试失败');
             toast.error(persistedMessage || result.message || '规则测试失败');
         }
     } catch (error) {
+        stopTestStageAutoProgress();
+        updateTestStageBoard('wait_otp', 'error');
+        updateTestProgressDetail(`测试异常：${error.message}`);
         toast.error(`测试失败: ${error.message}`);
     } finally {
         activeTests.delete(ruleId);
+        await sleep(900);
         hideTestProgressModal();
         await loadTempmailRules();
     }

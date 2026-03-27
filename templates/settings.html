@@ -45,11 +45,17 @@
                         <span class="sidebar-link-icon">⚙️</span>
                         <span>系统设置</span>
                     </a>
+                    <a href="/logs" class="sidebar-link">
+                        <span class="sidebar-link-icon">🧾</span>
+                        <span>日志中心</span>
+                    </a>
                 </div>
             </nav>
             
             <div class="sidebar-footer">
-                <button type="button" class="theme-toggle-btn" onclick="theme.toggle()" title="切换主题">🌙</button>
+                <button type="button" class="theme-toggle-btn" onclick="theme.toggle()" title="切换主题" aria-label="切换主题">
+                    <span data-theme-icon aria-hidden="true">🌙</span>
+                </button>
                 <a href="/logout" class="logout-link">退出</a>
             </div>
         </aside>

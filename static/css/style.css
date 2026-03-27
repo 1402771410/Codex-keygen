@@ -955,6 +955,26 @@ body {
     flex-wrap: wrap;
 }
 
+/* 账号页工具栏下拉菜单需跨卡片显示，避免被“全选横幅”遮挡 */
+.toolbar-card {
+    overflow: visible;
+    position: relative;
+    z-index: 220;
+}
+
+.toolbar-card .card-body {
+    overflow: visible;
+}
+
+.toolbar-card .dropdown {
+    position: relative;
+    z-index: 230;
+}
+
+.toolbar-card .dropdown-menu {
+    z-index: 1300;
+}
+
 /* ==================== 分页 ==================== */
 
 .pagination {
@@ -1096,6 +1116,79 @@ body {
     font-size: 0.8571rem;
     color: var(--semi-color-text-2);
     line-height: 1.55;
+}
+
+.test-stage-board {
+    margin-top: var(--semi-spacing-4);
+    border: 1px solid var(--semi-border-color-light);
+    border-radius: 12px;
+    padding: var(--semi-spacing-3);
+    background: color-mix(in srgb, var(--semi-color-bg-2) 92%, transparent);
+    display: flex;
+    flex-direction: column;
+    gap: var(--semi-spacing-2);
+    text-align: left;
+}
+
+.test-stage-item {
+    display: flex;
+    align-items: center;
+    gap: var(--semi-spacing-2);
+    font-size: 0.8125rem;
+    color: var(--semi-color-text-2);
+    transition: color var(--semi-motion-duration-fast) var(--semi-motion-ease-out);
+}
+
+.test-stage-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--semi-color-text-3);
+    flex-shrink: 0;
+}
+
+.test-stage-item.is-pending .test-stage-dot {
+    background: var(--semi-color-text-3);
+}
+
+.test-stage-item.is-running {
+    color: var(--semi-color-primary);
+}
+
+.test-stage-item.is-running .test-stage-dot {
+    background: var(--semi-color-primary);
+    animation: stage-pulse 1.15s ease-in-out infinite;
+}
+
+.test-stage-item.is-success {
+    color: var(--semi-color-success);
+}
+
+.test-stage-item.is-success .test-stage-dot {
+    background: var(--semi-color-success);
+}
+
+.test-stage-item.is-error {
+    color: var(--semi-color-danger);
+}
+
+.test-stage-item.is-error .test-stage-dot {
+    background: var(--semi-color-danger);
+}
+
+@keyframes stage-pulse {
+    0% {
+        transform: scale(0.88);
+        opacity: 0.8;
+    }
+    70% {
+        transform: scale(1.16);
+        opacity: 1;
+    }
+    100% {
+        transform: scale(0.88);
+        opacity: 0.8;
+    }
 }
 
 .test-spinner {

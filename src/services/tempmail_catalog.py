@@ -10,6 +10,11 @@ from ..config.constants import (
 )
 
 
+TEMPMAIL_PUBLIC_PROVIDER_OPTIONS = (
+    "tempmail_lol",
+)
+
+
 def normalize_tempmail_provider(provider: Optional[str]) -> str:
     """将供应商标识归一化为内部值。"""
     raw = str(provider or "").strip().lower()
@@ -29,7 +34,10 @@ def get_tempmail_provider_meta(provider: Optional[str]) -> Dict[str, Any]:
 def list_tempmail_provider_options() -> List[Dict[str, Any]]:
     """返回前端可展示的供应商选项。"""
     options: List[Dict[str, Any]] = []
-    for provider, meta in TEMPMAIL_PROVIDER_CATALOG.items():
+    for provider in TEMPMAIL_PUBLIC_PROVIDER_OPTIONS:
+        meta = TEMPMAIL_PROVIDER_CATALOG.get(provider)
+        if not meta:
+            continue
         options.append({
             "value": provider,
             "label": meta.get("label", provider),
@@ -110,45 +118,5 @@ def build_tempmail_builtin_specs(settings: Any) -> List[Dict[str, Any]]:
                 {"provider": TEMPMAIL_DEFAULT_PROVIDER, "base_url": getattr(settings, "tempmail_base_url", "")},
                 settings,
             ),
-        },
-        {
-            "builtin_key": "preset_mail_tm",
-            "name": "Mail.tm 免费邮箱",
-            "provider": "mail_tm",
-            "enabled": False,
-            "priority": 10,
-            "is_builtin": True,
-            "is_immutable": False,
-            "config": build_tempmail_config({"provider": "mail_tm"}, settings),
-        },
-        {
-            "builtin_key": "preset_mail_gw",
-            "name": "Mail.gw 免费邮箱",
-            "provider": "mail_gw",
-            "enabled": False,
-            "priority": 20,
-            "is_builtin": True,
-            "is_immutable": False,
-            "config": build_tempmail_config({"provider": "mail_gw"}, settings),
-        },
-        {
-            "builtin_key": "preset_onesecmail",
-            "name": "1secmail 免费邮箱",
-            "provider": "onesecmail",
-            "enabled": False,
-            "priority": 30,
-            "is_builtin": True,
-            "is_immutable": False,
-            "config": build_tempmail_config({"provider": "onesecmail"}, settings),
-        },
-        {
-            "builtin_key": "preset_guerrillamail",
-            "name": "GuerrillaMail 免费邮箱",
-            "provider": "guerrillamail",
-            "enabled": False,
-            "priority": 40,
-            "is_builtin": True,
-            "is_immutable": False,
-            "config": build_tempmail_config({"provider": "guerrillamail"}, settings),
         },
     ]

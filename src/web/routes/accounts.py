@@ -6,7 +6,7 @@ import json
 import logging
 import re
 import zipfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Body
@@ -91,6 +91,9 @@ class BatchDeleteRequest(BaseModel):
     status_filter: Optional[str] = None
     email_service_filter: Optional[str] = None
     search_filter: Optional[str] = None
+    start_time_filter: Optional[str] = None
+    end_time_filter: Optional[str] = None
+    email_list_filter: Optional[str] = None
 
 
 class BatchUpdateRequest(BaseModel):
@@ -108,6 +111,9 @@ def resolve_account_ids(
     status_filter: Optional[str] = None,
     email_service_filter: Optional[str] = None,
     search_filter: Optional[str] = None,
+    start_time_filter: Optional[str] = None,
+    end_time_filter: Optional[str] = None,
+    email_list_filter: Optional[str] = None,
 ) -> List[int]:
     """当 select_all=True 时查询全部符合条件的 ID，否则直接返回传入的 ids"""
     if not select_all:
@@ -122,7 +128,70 @@ def resolve_account_ids(
         query = query.filter(
             (Account.email.ilike(pattern)) | (Account.account_id.ilike(pattern))
         )
+
+    start_time, _ = _parse_time_filter(start_time_filter, "start_time")
+    end_time, end_time_date_only = _parse_time_filter(end_time_filter, "end_time")
+    email_list = _parse_email_list_filter(email_list_filter)
+
+    if start_time is not None:
+        query = query.filter(Account.created_at >= start_time)
+
+    if end_time is not None:
+        if end_time_date_only:
+            query = query.filter(Account.created_at < end_time + timedelta(days=1))
+        else:
+            query = query.filter(Account.created_at <= end_time)
+
+    if email_list:
+        query = query.filter(Account.email.in_(email_list))
+
     return [row[0] for row in query.all()]
+
+
+def _parse_time_filter(value: Optional[str], field_name: str) -> tuple[Optional[datetime], bool]:
+    """解析时间筛选字段，返回 (时间, 是否为仅日期格式)。"""
+    if not value:
+        return None, False
+
+    raw = str(value).strip()
+    if not raw:
+        return None, False
+
+    if len(raw) == 10:
+        try:
+            return datetime.strptime(raw, "%Y-%m-%d"), True
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"{field_name} 日期格式错误，应为 YYYY-MM-DD") from exc
+
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).replace(tzinfo=None), False
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"{field_name} 时间格式错误，应为 ISO8601") from exc
+
+
+def _parse_email_list_filter(value: Optional[str]) -> List[str]:
+    """解析邮箱列表筛选字段（逗号/分号/换行/空白分隔）。"""
+    if not value:
+        return []
+
+    raw = str(value).strip()
+    if not raw:
+        return []
+
+    candidates = [item.strip() for item in re.split(r"[,;\n\s]+", raw) if item.strip()]
+    unique_items: List[str] = []
+    seen = set()
+    for email in candidates:
+        lowered = email.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        unique_items.append(email)
+
+    if len(unique_items) > 200:
+        raise HTTPException(status_code=400, detail="邮箱列表最多支持 200 项")
+
+    return unique_items
 
 
 def account_to_response(account: Account) -> AccountResponse:
@@ -157,12 +226,19 @@ async def list_accounts(
     status: Optional[str] = Query(None, description="状态筛选"),
     email_service: Optional[str] = Query(None, description="邮箱服务筛选"),
     search: Optional[str] = Query(None, description="搜索关键词"),
+    start_time: Optional[str] = Query(None, description="起始时间（ISO8601 或 YYYY-MM-DD）"),
+    end_time: Optional[str] = Query(None, description="结束时间（ISO8601 或 YYYY-MM-DD）"),
+    email_list: Optional[str] = Query(None, description="邮箱列表（逗号/换行分隔）"),
 ):
     """
     获取账号列表
 
-    支持分页、状态筛选、邮箱服务筛选和搜索
+    支持分页、状态筛选、邮箱服务筛选、搜索、时间范围与邮箱列表筛选
     """
+    start_time_value, _ = _parse_time_filter(start_time, "start_time")
+    end_time_value, end_time_date_only = _parse_time_filter(end_time, "end_time")
+    email_filter_list = _parse_email_list_filter(email_list)
+
     with get_db() as db:
         # 构建查询
         query = db.query(Account)
@@ -182,6 +258,18 @@ async def list_accounts(
                 (Account.email.ilike(search_pattern)) |
                 (Account.account_id.ilike(search_pattern))
             )
+
+        if start_time_value is not None:
+            query = query.filter(Account.created_at >= start_time_value)
+
+        if end_time_value is not None:
+            if end_time_date_only:
+                query = query.filter(Account.created_at < end_time_value + timedelta(days=1))
+            else:
+                query = query.filter(Account.created_at <= end_time_value)
+
+        if email_filter_list:
+            query = query.filter(Account.email.in_(email_filter_list))
 
         # 统计总数
         total = query.count()
@@ -278,8 +366,15 @@ async def batch_delete_accounts(request: BatchDeleteRequest):
     """批量删除账号"""
     with get_db() as db:
         ids = resolve_account_ids(
-            db, request.ids, request.select_all,
-            request.status_filter, request.email_service_filter, request.search_filter
+            db,
+            request.ids,
+            request.select_all,
+            request.status_filter,
+            request.email_service_filter,
+            request.search_filter,
+            request.start_time_filter,
+            request.end_time_filter,
+            request.email_list_filter,
         )
         deleted_count = 0
         errors = []
@@ -333,6 +428,9 @@ class BatchExportRequest(BaseModel):
     status_filter: Optional[str] = None
     email_service_filter: Optional[str] = None
     search_filter: Optional[str] = None
+    start_time_filter: Optional[str] = None
+    end_time_filter: Optional[str] = None
+    email_list_filter: Optional[str] = None
     export_mode: Optional[str] = "single_file"  # single_file | per_account_zip
 
 
@@ -423,8 +521,15 @@ async def export_accounts_json(request: BatchExportRequest):
 
     with get_db() as db:
         ids = resolve_account_ids(
-            db, request.ids, request.select_all,
-            request.status_filter, request.email_service_filter, request.search_filter
+            db,
+            request.ids,
+            request.select_all,
+            request.status_filter,
+            request.email_service_filter,
+            request.search_filter,
+            request.start_time_filter,
+            request.end_time_filter,
+            request.email_list_filter,
         )
         accounts = db.query(Account).filter(Account.id.in_(ids)).all()
 
@@ -492,8 +597,15 @@ async def export_accounts_csv(request: BatchExportRequest):
 
     with get_db() as db:
         ids = resolve_account_ids(
-            db, request.ids, request.select_all,
-            request.status_filter, request.email_service_filter, request.search_filter
+            db,
+            request.ids,
+            request.select_all,
+            request.status_filter,
+            request.email_service_filter,
+            request.search_filter,
+            request.start_time_filter,
+            request.end_time_filter,
+            request.email_list_filter,
         )
         accounts = db.query(Account).filter(Account.id.in_(ids)).all()
 
@@ -551,8 +663,15 @@ async def export_accounts_sub2api(request: BatchExportRequest):
 
     with get_db() as db:
         ids = resolve_account_ids(
-            db, request.ids, request.select_all,
-            request.status_filter, request.email_service_filter, request.search_filter
+            db,
+            request.ids,
+            request.select_all,
+            request.status_filter,
+            request.email_service_filter,
+            request.search_filter,
+            request.start_time_filter,
+            request.end_time_filter,
+            request.email_list_filter,
         )
         accounts = db.query(Account).filter(Account.id.in_(ids)).all()
 
@@ -596,8 +715,15 @@ async def export_accounts_cpa(request: BatchExportRequest):
 
     with get_db() as db:
         ids = resolve_account_ids(
-            db, request.ids, request.select_all,
-            request.status_filter, request.email_service_filter, request.search_filter
+            db,
+            request.ids,
+            request.select_all,
+            request.status_filter,
+            request.email_service_filter,
+            request.search_filter,
+            request.start_time_filter,
+            request.end_time_filter,
+            request.email_list_filter,
         )
         accounts = db.query(Account).filter(Account.id.in_(ids)).all()
 
@@ -675,6 +801,9 @@ class BatchRefreshRequest(BaseModel):
     status_filter: Optional[str] = None
     email_service_filter: Optional[str] = None
     search_filter: Optional[str] = None
+    start_time_filter: Optional[str] = None
+    end_time_filter: Optional[str] = None
+    email_list_filter: Optional[str] = None
 
 
 class TokenValidateRequest(BaseModel):
@@ -690,6 +819,9 @@ class BatchValidateRequest(BaseModel):
     status_filter: Optional[str] = None
     email_service_filter: Optional[str] = None
     search_filter: Optional[str] = None
+    start_time_filter: Optional[str] = None
+    end_time_filter: Optional[str] = None
+    email_list_filter: Optional[str] = None
 
 
 @router.post("/batch-refresh")
@@ -705,8 +837,15 @@ async def batch_refresh_tokens(request: BatchRefreshRequest, background_tasks: B
 
     with get_db() as db:
         ids = resolve_account_ids(
-            db, request.ids, request.select_all,
-            request.status_filter, request.email_service_filter, request.search_filter
+            db,
+            request.ids,
+            request.select_all,
+            request.status_filter,
+            request.email_service_filter,
+            request.search_filter,
+            request.start_time_filter,
+            request.end_time_filter,
+            request.email_list_filter,
         )
 
     for account_id in ids:
@@ -756,8 +895,15 @@ async def batch_validate_tokens(request: BatchValidateRequest):
 
     with get_db() as db:
         ids = resolve_account_ids(
-            db, request.ids, request.select_all,
-            request.status_filter, request.email_service_filter, request.search_filter
+            db,
+            request.ids,
+            request.select_all,
+            request.status_filter,
+            request.email_service_filter,
+            request.search_filter,
+            request.start_time_filter,
+            request.end_time_filter,
+            request.email_list_filter,
         )
 
     for account_id in ids:
@@ -812,6 +958,9 @@ class BatchCPAUploadRequest(BaseModel):
     status_filter: Optional[str] = None
     email_service_filter: Optional[str] = None
     search_filter: Optional[str] = None
+    start_time_filter: Optional[str] = None
+    end_time_filter: Optional[str] = None
+    email_list_filter: Optional[str] = None
     cpa_service_id: Optional[int] = None  # 指定 CPA 服务 ID，不传则使用全局配置
 
 
@@ -836,8 +985,15 @@ async def batch_upload_accounts_to_cpa(request: BatchCPAUploadRequest):
 
     with get_db() as db:
         ids = resolve_account_ids(
-            db, request.ids, request.select_all,
-            request.status_filter, request.email_service_filter, request.search_filter
+            db,
+            request.ids,
+            request.select_all,
+            request.status_filter,
+            request.email_service_filter,
+            request.search_filter,
+            request.start_time_filter,
+            request.end_time_filter,
+            request.email_list_filter,
         )
 
     results = batch_upload_to_cpa(
@@ -914,6 +1070,9 @@ class BatchSub2ApiUploadRequest(BaseModel):
     status_filter: Optional[str] = None
     email_service_filter: Optional[str] = None
     search_filter: Optional[str] = None
+    start_time_filter: Optional[str] = None
+    end_time_filter: Optional[str] = None
+    email_list_filter: Optional[str] = None
     service_id: Optional[int] = None  # 指定 Sub2API 服务 ID，不传则使用第一个启用的
     concurrency: int = 3
     priority: int = 50
@@ -945,8 +1104,15 @@ async def batch_upload_accounts_to_sub2api(request: BatchSub2ApiUploadRequest):
 
     with get_db() as db:
         ids = resolve_account_ids(
-            db, request.ids, request.select_all,
-            request.status_filter, request.email_service_filter, request.search_filter
+            db,
+            request.ids,
+            request.select_all,
+            request.status_filter,
+            request.email_service_filter,
+            request.search_filter,
+            request.start_time_filter,
+            request.end_time_filter,
+            request.email_list_filter,
         )
 
     results = batch_upload_to_sub2api(
@@ -1013,6 +1179,9 @@ class BatchUploadTMRequest(BaseModel):
     status_filter: Optional[str] = None
     email_service_filter: Optional[str] = None
     search_filter: Optional[str] = None
+    start_time_filter: Optional[str] = None
+    end_time_filter: Optional[str] = None
+    email_list_filter: Optional[str] = None
     service_id: Optional[int] = None
 
 
@@ -1034,8 +1203,15 @@ async def batch_upload_accounts_to_tm(request: BatchUploadTMRequest):
         api_key = svc.api_key
 
         ids = resolve_account_ids(
-            db, request.ids, request.select_all,
-            request.status_filter, request.email_service_filter, request.search_filter
+            db,
+            request.ids,
+            request.select_all,
+            request.status_filter,
+            request.email_service_filter,
+            request.search_filter,
+            request.start_time_filter,
+            request.end_time_filter,
+            request.email_list_filter,
         )
 
     results = batch_upload_to_team_manager(ids, api_url, api_key)

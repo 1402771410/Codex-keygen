@@ -86,6 +86,19 @@ def get_global_tempmail_service(db, settings: Any, *, ensure_exists: bool = True
 def ensure_builtin_tempmail_services(db, settings: Any) -> None:
     """确保系统预置临时邮箱服务存在。"""
     specs = build_tempmail_builtin_specs(settings)
+    valid_builtin_keys = {str(spec.get("builtin_key") or "") for spec in specs}
+
+    # 清理已下线的历史预置项（例如不再提供的免费邮箱供应商）
+    stale_builtin_services = db.query(EmailService).filter(EmailService.is_builtin == True).all()
+    for stale_service in stale_builtin_services:
+        stale_key = str(stale_service.builtin_key or "")
+        if not stale_key:
+            continue
+        if stale_key in valid_builtin_keys:
+            continue
+        if stale_key == TEMPMAIL_GLOBAL_BUILTIN_KEY:
+            continue
+        db.delete(stale_service)
 
     for spec in specs:
         service = db.query(EmailService).filter(EmailService.builtin_key == spec["builtin_key"]).first()
@@ -146,6 +159,15 @@ def ensure_builtin_tempmail_services(db, settings: Any) -> None:
         global_service.config = normalized_runtime["config"]
         global_service.selection_mode = normalized_runtime["selection_mode"]
         global_service.single_service_id = normalized_runtime["single_service_id"]
+
+        # 若单服务目标已被清理或不可用，则回退为空，避免指向无效项。
+        if global_service.single_service_id:
+            selected_service = db.query(EmailService).filter(
+                EmailService.id == global_service.single_service_id,
+                EmailService.service_type == EmailServiceType.TEMPMAIL.value,
+            ).first()
+            if selected_service is None or str(selected_service.builtin_key or "") == TEMPMAIL_GLOBAL_BUILTIN_KEY:
+                global_service.single_service_id = None
 
     db.commit()
 

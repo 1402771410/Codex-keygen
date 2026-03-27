@@ -66,11 +66,17 @@
                         <span class="sidebar-link-icon">⚙️</span>
                         <span>系统设置</span>
                     </a>
+                    <a href="/logs" class="sidebar-link">
+                        <span class="sidebar-link-icon">🧾</span>
+                        <span>日志中心</span>
+                    </a>
                 </div>
             </nav>
             
             <div class="sidebar-footer">
-                <button type="button" class="theme-toggle-btn" onclick="theme.toggle()" title="切换主题">🌙</button>
+                <button type="button" class="theme-toggle-btn" onclick="theme.toggle()" title="切换主题" aria-label="切换主题">
+                    <span data-theme-icon aria-hidden="true">🌙</span>
+                </button>
                 <a href="/logout" class="logout-link">退出</a>
             </div>
         </aside>
@@ -123,6 +129,9 @@
                             </select>
 
                             <input type="text" id="search-input" class="form-input" placeholder="🔍 搜索邮箱..." style="min-width: 200px;">
+                            <input type="datetime-local" id="filter-start-time" class="form-input" title="起始时间" style="min-width: 190px;">
+                            <input type="datetime-local" id="filter-end-time" class="form-input" title="结束时间" style="min-width: 190px;">
+                            <input type="text" id="filter-email-list" class="form-input" placeholder="邮箱列表（逗号/分号分隔）" style="min-width: 240px;">
                         </div>
 
                         <div class="toolbar-right">
@@ -226,7 +235,7 @@
                                 </thead>
                                 <tbody id="accounts-table">
                                     <tr>
-                                        <td colspan="11">
+                                        <td colspan="10">
                                             <div class="empty-state">
                                                 <div class="skeleton skeleton-text" style="width: 60%;"></div>
                                                 <div class="skeleton skeleton-text" style="width: 80%;"></div>

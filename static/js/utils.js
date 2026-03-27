@@ -113,16 +113,32 @@ class ThemeManager {
     }
 
     updateToggleButtons() {
-        const buttons = document.querySelectorAll('.theme-toggle');
+        const buttons = document.querySelectorAll('.theme-toggle, .theme-toggle-btn');
         buttons.forEach(btn => {
-            btn.innerHTML = this.theme === 'light' ? '🌙' : '☀️';
-            btn.title = this.theme === 'light' ? '切换到暗色模式' : '切换到亮色模式';
+            const iconText = this.theme === 'light' ? '🌙' : '☀️';
+            const titleText = this.theme === 'light' ? '切换到暗色模式' : '切换到亮色模式';
+            btn.title = titleText;
+            btn.setAttribute('aria-label', titleText);
+            btn.dataset.themeMode = this.theme;
+
+            const iconSlot = btn.querySelector('[data-theme-icon]');
+            if (iconSlot) {
+                iconSlot.textContent = iconText;
+                return;
+            }
+
+            if (btn.querySelector('svg')) {
+                return;
+            }
+
+            btn.textContent = iconText;
         });
     }
 }
 
 // 全局主题实例
 const theme = new ThemeManager();
+window.theme = theme;
 
 // ============================================
 // 加载状态管理

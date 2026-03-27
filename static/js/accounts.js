@@ -10,7 +10,14 @@ let totalAccounts = 0;
 let selectedAccounts = new Set();
 let isLoading = false;
 let selectAllPages = false;  // 是否选中了全部页
-let currentFilters = { status: '', email_service: '', search: '' };  // 当前筛选条件
+let currentFilters = {
+    status: '',
+    email_service: '',
+    search: '',
+    start_time: '',
+    end_time: '',
+    email_list: '',
+};  // 当前筛选条件
 const refreshingAccountIds = new Set();
 let isBatchOperationRunning = false;
 let batchProgressHideTimer = null;
@@ -32,6 +39,9 @@ const elements = {
     filterStatus: document.getElementById('filter-status'),
     filterService: document.getElementById('filter-service'),
     searchInput: document.getElementById('search-input'),
+    filterStartTime: document.getElementById('filter-start-time'),
+    filterEndTime: document.getElementById('filter-end-time'),
+    filterEmailList: document.getElementById('filter-email-list'),
     refreshBtn: document.getElementById('refresh-btn'),
     batchRefreshBtn: document.getElementById('batch-refresh-btn'),
     batchValidateBtn: document.getElementById('batch-validate-btn'),
@@ -74,24 +84,32 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // 事件监听
 function initEventListeners() {
-    // 筛选
-    elements.filterStatus.addEventListener('change', () => {
+    const triggerFilterReload = () => {
         currentPage = 1;
         resetSelectAllPages();
         loadAccounts();
-    });
+    };
 
-    elements.filterService.addEventListener('change', () => {
-        currentPage = 1;
-        resetSelectAllPages();
-        loadAccounts();
-    });
+    // 筛选
+    elements.filterStatus.addEventListener('change', triggerFilterReload);
+
+    elements.filterService.addEventListener('change', triggerFilterReload);
+
+    if (elements.filterStartTime) {
+        elements.filterStartTime.addEventListener('change', triggerFilterReload);
+    }
+
+    if (elements.filterEndTime) {
+        elements.filterEndTime.addEventListener('change', triggerFilterReload);
+    }
+
+    if (elements.filterEmailList) {
+        elements.filterEmailList.addEventListener('input', debounce(triggerFilterReload, 350));
+    }
 
     // 搜索（防抖）
     elements.searchInput.addEventListener('input', debounce(() => {
-        currentPage = 1;
-        resetSelectAllPages();
-        loadAccounts();
+        triggerFilterReload();
     }, 300));
 
     // 快捷键聚焦搜索
@@ -99,8 +117,7 @@ function initEventListeners() {
         if (e.key === 'Escape') {
             elements.searchInput.blur();
             elements.searchInput.value = '';
-            resetSelectAllPages();
-            loadAccounts();
+            triggerFilterReload();
         }
     });
 
@@ -249,7 +266,7 @@ async function loadAccounts() {
     // 显示加载状态
     elements.table.innerHTML = `
         <tr>
-            <td colspan="9">
+            <td colspan="10">
                 <div class="empty-state">
                     <div class="skeleton skeleton-text" style="width: 60%;"></div>
                     <div class="skeleton skeleton-text" style="width: 80%;"></div>
@@ -263,6 +280,9 @@ async function loadAccounts() {
     currentFilters.status = elements.filterStatus.value;
     currentFilters.email_service = elements.filterService.value;
     currentFilters.search = elements.searchInput.value.trim();
+    currentFilters.start_time = elements.filterStartTime?.value?.trim() || '';
+    currentFilters.end_time = elements.filterEndTime?.value?.trim() || '';
+    currentFilters.email_list = elements.filterEmailList?.value?.trim() || '';
 
     const params = buildAccountsListParams(currentPage, pageSize);
 
@@ -275,7 +295,7 @@ async function loadAccounts() {
         console.error('加载账号列表失败:', error);
         elements.table.innerHTML = `
             <tr>
-                <td colspan="9">
+                <td colspan="10">
                     <div class="empty-state">
                         <div class="empty-state-icon">❌</div>
                         <div class="empty-state-title">加载失败</div>
@@ -294,7 +314,7 @@ function renderAccounts(accounts) {
     if (accounts.length === 0) {
         elements.table.innerHTML = `
             <tr>
-                <td colspan="9">
+                <td colspan="10">
                     <div class="empty-state">
                         <div class="empty-state-icon">📭</div>
                         <div class="empty-state-title">暂无数据</div>
@@ -446,6 +466,9 @@ function buildBatchPayload(extraFields = {}) {
             status_filter: currentFilters.status || null,
             email_service_filter: currentFilters.email_service || null,
             search_filter: currentFilters.search || null,
+            start_time_filter: currentFilters.start_time || null,
+            end_time_filter: currentFilters.end_time || null,
+            email_list_filter: currentFilters.email_list || null,
             ...extraFields
         };
     }
@@ -715,6 +738,15 @@ function buildAccountsListParams(page, pageSizeValue = pageSize) {
     }
     if (currentFilters.search) {
         params.append('search', currentFilters.search);
+    }
+    if (currentFilters.start_time) {
+        params.append('start_time', currentFilters.start_time);
+    }
+    if (currentFilters.end_time) {
+        params.append('end_time', currentFilters.end_time);
+    }
+    if (currentFilters.email_list) {
+        params.append('email_list', currentFilters.email_list);
     }
 
     return params;
