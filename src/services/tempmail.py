@@ -90,6 +90,7 @@ class TempmailService(BaseEmailService):
         """从目标临时邮箱中轮询获取验证码。"""
         runtime_config = self._resolve_runtime_config()
         provider = runtime_config["provider"]
+        otp_purpose = str(runtime_config.get("otp_purpose") or "").strip().lower() or None
         email_info = self._email_cache.get(email) or {}
 
         if provider == "tempmail_lol":
@@ -119,7 +120,7 @@ class TempmailService(BaseEmailService):
             return self._poll_guerrillamail(email, sid_token, timeout, pattern, runtime_config)
 
         if provider == "pop3_alias":
-            return self._poll_pop3_alias(email, timeout, pattern, otp_sent_at, runtime_config)
+            return self._poll_pop3_alias(email, timeout, pattern, otp_sent_at, runtime_config, otp_purpose=otp_purpose)
 
         logger.warning("未知供应商 %s，无法获取验证码", provider)
         return None
@@ -453,7 +454,9 @@ class TempmailService(BaseEmailService):
         if not local_part or not domain:
             raise EmailServiceError("主邮箱地址格式无效")
 
-        alias_separator = str(runtime_config.get("alias_separator") or "+").strip() or "+"
+        alias_separator = str(runtime_config.get("alias_separator") or "").strip()
+        if alias_separator == "+":
+            alias_separator = ""
         alias_length = max(4, int(runtime_config.get("alias_length") or 8))
         alias_charset = str(runtime_config.get("alias_charset") or "loweralnum").strip().lower()
         alias_suffix = self._generate_alias_suffix(alias_length, alias_charset)
@@ -744,8 +747,11 @@ class TempmailService(BaseEmailService):
         pattern: str,
         otp_sent_at: Optional[float],
         runtime_config: Dict[str, Any],
+        otp_purpose: Optional[str] = None,
     ) -> Optional[str]:
         pop3_service = self._build_pop3_service(runtime_config)
+        if otp_purpose:
+            pop3_service.config["otp_purpose"] = otp_purpose
         code = pop3_service.get_verification_code(
             email=email,
             timeout=timeout,
@@ -867,6 +873,7 @@ class TempmailService(BaseEmailService):
             "max_messages": int(runtime_config.get("max_messages") or 30),
             "subject_keyword": str(runtime_config.get("subject_keyword") or "").strip(),
             "sender_keyword": str(runtime_config.get("sender_keyword") or "").strip(),
+            "otp_purpose": str(runtime_config.get("otp_purpose") or "").strip().lower(),
         }
         return Pop3EmailService(pop3_config, name=f"{self.name}_pop3_alias")
 

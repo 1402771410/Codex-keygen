@@ -607,7 +607,7 @@ class RegistrationEngine:
             self._log(f"发送验证码失败: {e}", "error")
             return False
 
-    def _get_verification_code(self) -> Optional[str]:
+    def _get_verification_code(self, otp_purpose: Optional[str] = None) -> Optional[str]:
         """获取验证码"""
         try:
             email = self.email
@@ -615,7 +615,16 @@ class RegistrationEngine:
                 self._log("获取验证码失败: 邮箱为空", "error")
                 return None
 
-            self._log(f"正在等待邮箱 {email} 的验证码...")
+            if otp_purpose:
+                effective_purpose = str(otp_purpose).strip().lower()
+            else:
+                effective_purpose = "login" if self._is_existing_account else "create"
+
+            self._log(f"正在等待邮箱 {email} 的验证码（用途: {effective_purpose}）...")
+
+            email_service_config = getattr(self.email_service, "config", None)
+            if isinstance(email_service_config, dict):
+                email_service_config["otp_purpose"] = effective_purpose
 
             email_id = self.email_info.get("service_id") if self.email_info else None
             code = self.email_service.get_verification_code(
@@ -810,7 +819,7 @@ class RegistrationEngine:
             return None
 
         self._log("降级登录: 等待验证码...")
-        code = self._get_verification_code()
+        code = self._get_verification_code(otp_purpose="login")
         if not code:
             self._log("降级登录失败：获取验证码失败", "error")
             return None
@@ -1102,7 +1111,7 @@ class RegistrationEngine:
 
             stage = "wait_otp"
             self._log("探测 10/10: 等待验证码...")
-            code = self._get_verification_code()
+            code = self._get_verification_code(otp_purpose="login" if self._is_existing_account else "create")
             if not code:
                 return OTPProbeResult(
                     success=False,
@@ -1225,7 +1234,7 @@ class RegistrationEngine:
 
             # 10. 获取验证码
             self._log("10. 等待验证码...")
-            code = self._get_verification_code()
+            code = self._get_verification_code(otp_purpose="login" if self._is_existing_account else "create")
             if not code:
                 result.error_message = "获取验证码失败"
                 return result

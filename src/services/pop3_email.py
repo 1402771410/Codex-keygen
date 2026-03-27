@@ -9,7 +9,7 @@ import time
 from datetime import datetime
 from email import policy
 from email.parser import BytesParser
-from email.utils import parsedate_to_datetime
+from email.utils import getaddresses, parsedate_to_datetime
 from typing import Any, Dict, List, Optional
 
 from .base import BaseEmailService, EmailServiceError, EmailServiceType
@@ -33,6 +33,23 @@ def _to_bool(value: Any, default: bool = True) -> bool:
 class Pop3EmailService(BaseEmailService):
     """POP3 邮箱验证码读取服务。"""
 
+    _RECIPIENT_HEADER_FIELDS = (
+        "to",
+        "delivered_to",
+        "x_original_to",
+        "envelope_to",
+        "cc",
+        "resent_to",
+        "resent_cc",
+    )
+    _LOGIN_PURPOSE_HINTS = (
+        "if you were not trying to log in to openai",
+    )
+    _CREATE_PURPOSE_HINTS = (
+        "please ignore this email if this wasn't you trying to create a chatgpt account",
+    )
+    _EMAIL_PATTERN = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+
     def __init__(self, config: Optional[Dict[str, Any]] = None, name: Optional[str] = None):
         super().__init__(EmailServiceType.POP3, str(name or "pop3_email_service"))
 
@@ -52,6 +69,8 @@ class Pop3EmailService(BaseEmailService):
             "max_messages": max(1, int(source.get("max_messages") or 30)),
             "subject_keyword": str(source.get("subject_keyword") or "").strip(),
             "sender_keyword": str(source.get("sender_keyword") or "").strip(),
+            "otp_purpose": str(source.get("otp_purpose") or "").strip().lower(),
+            "clock_skew_tolerance": max(0, int(source.get("clock_skew_tolerance") or 120)),
         }
 
         self._validate_required()
@@ -97,23 +116,38 @@ class Pop3EmailService(BaseEmailService):
         while time.time() - start < effective_timeout:
             try:
                 messages = self._fetch_latest_messages()
+                purpose = str(self.config.get("otp_purpose") or "").strip().lower()
+                skew_tolerance = max(0, int(self.config.get("clock_skew_tolerance") or 120))
+                matched_codes: List[tuple[int, float, str]] = []
+
                 for message in messages:
-                    recipient = str(message.get("to") or "")
-                    if recipient and email and not self._recipient_matches(recipient, email):
+                    if email and not self._message_targets_email(message, email):
+                        continue
+
+                    purpose_score = self._purpose_score(message, purpose)
+                    if purpose_score < 0:
                         continue
 
                     if not self._match_filters(message):
                         continue
 
                     timestamp = message.get("timestamp")
-                    if otp_sent_at and isinstance(timestamp, float) and timestamp < otp_sent_at:
+                    if otp_sent_at and isinstance(timestamp, float) and timestamp < (otp_sent_at - skew_tolerance):
                         continue
 
                     body = str(message.get("body") or "")
-                    match = re.search(pattern, body)
+                    subject = str(message.get("subject") or "")
+                    search_text = f"{subject}\n{body}" if subject else body
+                    match = re.search(pattern, search_text)
                     if match:
-                        self.update_status(True)
-                        return match.group(1)
+                        code = match.group(1) if match.lastindex else match.group(0)
+                        code_ts = timestamp if isinstance(timestamp, float) else 0.0
+                        matched_codes.append((purpose_score, code_ts, code))
+
+                if matched_codes:
+                    matched_codes.sort(key=lambda item: (item[0], item[1]), reverse=True)
+                    self.update_status(True)
+                    return matched_codes[0][2]
             except Exception as exc:
                 # 读取失败继续轮询，避免瞬时网络抖动直接终止。
                 self.update_status(False, exc)
@@ -190,11 +224,21 @@ class Pop3EmailService(BaseEmailService):
                     raw_message = b"\r\n".join(lines)
                     message = BytesParser(policy=policy.default).parsebytes(raw_message)
                     body = self._extract_body_text(message)
+                    header_values = {
+                        "to": ", ".join([str(item) for item in (message.get_all("to") or [])]),
+                        "delivered_to": ", ".join([str(item) for item in (message.get_all("delivered-to") or [])]),
+                        "x_original_to": ", ".join([str(item) for item in (message.get_all("x-original-to") or [])]),
+                        "envelope_to": ", ".join([str(item) for item in (message.get_all("envelope-to") or [])]),
+                        "cc": ", ".join([str(item) for item in (message.get_all("cc") or [])]),
+                        "resent_to": ", ".join([str(item) for item in (message.get_all("resent-to") or [])]),
+                        "resent_cc": ", ".join([str(item) for item in (message.get_all("resent-cc") or [])]),
+                    }
                     messages.append(
                         {
                             "subject": str(message.get("subject") or ""),
                             "from": str(message.get("from") or ""),
-                            "to": str(message.get("to") or ""),
+                            **header_values,
+                            "recipients": self._extract_recipient_addresses(header_values),
                             "body": body,
                             "timestamp": self._parse_message_timestamp(message),
                         }
@@ -207,11 +251,11 @@ class Pop3EmailService(BaseEmailService):
         return messages
 
     def _match_filters(self, message: Dict[str, Any]) -> bool:
-        subject_keyword = str(self.config.get("subject_keyword") or "").strip()
-        sender_keyword = str(self.config.get("sender_keyword") or "").strip()
+        subject_keyword = self._normalize_text(str(self.config.get("subject_keyword") or ""))
+        sender_keyword = self._normalize_text(str(self.config.get("sender_keyword") or ""))
 
-        subject = str(message.get("subject") or "")
-        sender = str(message.get("from") or "")
+        subject = self._normalize_text(str(message.get("subject") or ""))
+        sender = self._normalize_text(str(message.get("from") or ""))
 
         if subject_keyword and subject_keyword not in subject:
             return False
@@ -219,13 +263,87 @@ class Pop3EmailService(BaseEmailService):
             return False
         return True
 
-    @staticmethod
-    def _recipient_matches(recipient_text: str, target_email: str) -> bool:
-        recipient_norm = str(recipient_text or "").strip().lower()
-        target_norm = str(target_email or "").strip().lower()
-        if not recipient_norm or not target_norm:
+    def _purpose_score(self, message: Dict[str, Any], purpose: str) -> int:
+        purpose_norm = self._normalize_text(purpose)
+        if purpose_norm not in {"login", "create", "register"}:
+            return 0
+
+        content = self._normalize_text(
+            f"{message.get('subject') or ''}\n{message.get('body') or ''}"
+        )
+        if not content:
+            return 0
+
+        login_hit = any(hint in content for hint in self._LOGIN_PURPOSE_HINTS)
+        create_hit = any(hint in content for hint in self._CREATE_PURPOSE_HINTS)
+
+        if purpose_norm == "login":
+            if create_hit and not login_hit:
+                return -1
+            return 1 if login_hit else 0
+
+        if login_hit and not create_hit:
+            return -1
+        return 1 if create_hit else 0
+
+    def _message_targets_email(self, message: Dict[str, Any], target_email: str) -> bool:
+        target_norm = self._normalize_email(target_email)
+        if not target_norm:
             return True
-        return target_norm in recipient_norm
+
+        recipients = self._extract_recipient_addresses(message)
+        if not recipients:
+            return False
+
+        return any(self._normalize_email(item) == target_norm for item in recipients)
+
+    def _extract_recipient_addresses(self, message: Dict[str, Any]) -> List[str]:
+        recipients: List[str] = []
+        direct_recipients = message.get("recipients")
+        if isinstance(direct_recipients, list):
+            for item in direct_recipients:
+                normalized = self._normalize_email(item)
+                if normalized and normalized not in recipients:
+                    recipients.append(normalized)
+            if recipients:
+                return recipients
+
+        candidate_values: List[str] = []
+        for field in self._RECIPIENT_HEADER_FIELDS:
+            value = message.get(field)
+            if value:
+                candidate_values.append(str(value))
+
+        if not candidate_values:
+            return []
+
+        parsed = [self._normalize_email(address) for _, address in getaddresses(candidate_values) if address]
+        for item in parsed:
+            if item and item not in recipients:
+                recipients.append(item)
+
+        if recipients:
+            return recipients
+
+        for raw in candidate_values:
+            for found in self._EMAIL_PATTERN.findall(raw):
+                normalized = self._normalize_email(found)
+                if normalized and normalized not in recipients:
+                    recipients.append(normalized)
+
+        return recipients
+
+    @staticmethod
+    def _normalize_email(value: Any) -> str:
+        return str(value or "").strip().lower()
+
+    @staticmethod
+    def _normalize_text(value: Any) -> str:
+        text = str(value or "")
+        text = text.replace("’", "'").replace("‘", "'").replace("“", '"').replace("”", '"')
+        text = re.sub(r"<[^>]+>", " ", text)
+        text = re.sub(r"\s+", " ", text)
+        return text.strip().lower()
 
     @staticmethod
     def _extract_body_text(message) -> str:

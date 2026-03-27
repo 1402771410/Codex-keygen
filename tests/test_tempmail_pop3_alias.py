@@ -1,7 +1,7 @@
 from src.services.tempmail import TempmailService
 
 
-def test_pop3_alias_create_email_generates_plus_alias():
+def test_pop3_alias_create_email_generates_alias_without_plus_separator():
     service = TempmailService(
         {
             "provider": "pop3_alias",
@@ -16,7 +16,9 @@ def test_pop3_alias_create_email_generates_plus_alias():
     )
 
     email_info = service.create_email()
-    assert email_info["email"].startswith("123456+")
+    local = email_info["email"].split("@", 1)[0]
+    assert local.startswith("123456")
+    assert "+" not in local
     assert email_info["email"].endswith("@225.com")
     assert email_info["provider"] == "pop3_alias"
 
@@ -38,10 +40,31 @@ def test_pop3_alias_create_email_supports_digits_charset():
 
     email_info = service.create_email()
     local = email_info["email"].split("@", 1)[0]
-    suffix = local.split("+", 1)[1]
+    suffix = local[len("123456"):]
     assert len(suffix) == 6
     assert suffix.isdigit()
     assert email_info["alias_charset"] == "digits"
+
+
+def test_pop3_alias_create_email_ignores_legacy_plus_separator_setting():
+    service = TempmailService(
+        {
+            "provider": "pop3_alias",
+            "base_email": "123456@225.com",
+            "pop3_host": "pop.225.com",
+            "pop3_port": 995,
+            "pop3_username": "123456@225.com",
+            "pop3_password": "secret",
+            "alias_separator": "+",
+            "alias_length": 6,
+            "use_ssl": True,
+        }
+    )
+
+    email_info = service.create_email()
+    local = email_info["email"].split("@", 1)[0]
+    assert "+" not in local
+    assert len(local) == len("123456") + 6
 
 
 def test_pop3_alias_get_code_delegates_to_pop3_service(monkeypatch):
