@@ -118,6 +118,7 @@ def test_available_services_only_include_real_otp_passed(tmp_path, monkeypatch):
         assert service_ids == {passed_id}
         assert payload["tempmail"]["available"] is True
         assert payload["tempmail"]["count"] == 1
+        assert "pop3" not in payload
         assert payload["selection"]["mode"] == "single"
         assert payload["selection"]["single_service_id"] == passed_id
     finally:

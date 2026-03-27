@@ -19,17 +19,7 @@ let displayedLogs = new Set();  // 用于日志去重
 let toastShown = false;  // 标记是否已显示过 toast
 let availableServices = {
     tempmail: { available: true, services: [] },
-    pop3: {
-        available: true,
-        services: [
-            {
-                id: 'manual',
-                name: '普通邮箱（POP3）',
-                type: 'pop3',
-                description: '手动填写 POP3 配置并轮询验证码',
-            },
-        ],
-    },
+    selection: { mode: 'single', single_service_id: null },
 };
 
 // WebSocket 相关变量
@@ -93,16 +83,6 @@ const elements = {
     autoUploadTm: document.getElementById('auto-upload-tm'),
     tmServiceSelectGroup: document.getElementById('tm-service-select-group'),
     tmServiceSelect: document.getElementById('tm-service-select'),
-    // POP3 普通邮箱配置
-    pop3ConfigGroup: document.getElementById('pop3-config-group'),
-    pop3Email: document.getElementById('pop3-email'),
-    pop3Host: document.getElementById('pop3-host'),
-    pop3Port: document.getElementById('pop3-port'),
-    pop3UseSsl: document.getElementById('pop3-use-ssl'),
-    pop3Username: document.getElementById('pop3-username'),
-    pop3Password: document.getElementById('pop3-password'),
-    pop3Timeout: document.getElementById('pop3-timeout'),
-    pop3PollInterval: document.getElementById('pop3-poll-interval'),
 };
 
 function reportStorageWarning(action, error) {
@@ -268,15 +248,6 @@ function initEventListeners() {
     // 邮箱服务切换
     elements.emailService.addEventListener('change', handleServiceChange);
 
-    if (elements.pop3UseSsl && elements.pop3Port) {
-        elements.pop3UseSsl.addEventListener('change', () => {
-            const currentPort = parseInt(elements.pop3Port.value || '0', 10);
-            if (currentPort === 995 || currentPort === 110 || !currentPort) {
-                elements.pop3Port.value = elements.pop3UseSsl.checked ? '995' : '110';
-            }
-        });
-    }
-
     // 取消按钮
     elements.cancelBtn.addEventListener('click', handleCancelTask);
 
@@ -304,17 +275,6 @@ async function loadAvailableServices() {
         const data = await api.get('/registration/available-services');
         availableServices = {
             tempmail: data?.tempmail || { available: false, services: [] },
-            pop3: data?.pop3 || {
-                available: true,
-                services: [
-                    {
-                        id: 'manual',
-                        name: '普通邮箱（POP3）',
-                        type: 'pop3',
-                        description: '手动填写 POP3 配置并轮询验证码',
-                    },
-                ],
-            },
             selection: data?.selection || { mode: 'single', single_service_id: null },
         };
 
@@ -336,9 +296,6 @@ function updateEmailServiceOptions() {
 
     const tempmailServices = Array.isArray(availableServices?.tempmail?.services)
         ? availableServices.tempmail.services
-        : [];
-    const pop3Services = Array.isArray(availableServices?.pop3?.services)
-        ? availableServices.pop3.services
         : [];
 
     if (availableServices?.tempmail?.available && tempmailServices.length > 0) {
@@ -364,31 +321,13 @@ function updateEmailServiceOptions() {
         select.appendChild(optgroup);
     }
 
-    if (availableServices?.pop3?.available && pop3Services.length > 0) {
-        const optgroup = document.createElement('optgroup');
-        optgroup.label = '📬 普通邮箱';
-
-        pop3Services.forEach(service => {
-            const option = document.createElement('option');
-            option.value = `pop3:${service.id || 'manual'}`;
-            option.textContent = service.description
-                ? `${service.name} - ${service.description}`
-                : service.name;
-            option.dataset.type = 'pop3';
-            optgroup.appendChild(option);
-        });
-
-        select.appendChild(optgroup);
-    }
-
     if (select.options.length === 0) {
         const disabled = document.createElement('option');
         disabled.value = '';
-        disabled.textContent = '暂无可用邮箱服务，请先在邮箱服务页面配置';
+        disabled.textContent = '暂无可用邮箱规则，请先到“邮箱服务”配置并完成测试';
         disabled.disabled = true;
         disabled.selected = true;
         select.appendChild(disabled);
-        togglePop3ConfigVisibility(false);
         return;
     }
 
@@ -412,8 +351,6 @@ function handleServiceChange(e) {
 
     const [type, id] = value.split(':');
 
-    togglePop3ConfigVisibility(type === 'pop3');
-
     if (type === 'tempmail' && id === 'default') {
         addLog('info', '[系统] 已选择自动模式，实际服务由“邮箱设置”决定（single/multi）');
         return;
@@ -427,51 +364,9 @@ function handleServiceChange(e) {
         if (service) {
             addLog('info', `[系统] 已选择临时邮箱服务: ${service.name}`);
         }
-        return;
+    } else {
+        addLog('warning', `[警告] 当前页面不支持邮箱类型: ${type}`);
     }
-
-    if (type === 'pop3') {
-        addLog('info', '[系统] 已选择普通邮箱（POP3），请填写服务器和账号信息');
-    }
-}
-
-function togglePop3ConfigVisibility(visible) {
-    if (!elements.pop3ConfigGroup) return;
-    elements.pop3ConfigGroup.style.display = visible ? 'block' : 'none';
-}
-
-function collectPop3Config() {
-    const email = (elements.pop3Email?.value || '').trim();
-    const host = (elements.pop3Host?.value || '').trim();
-    const portRaw = (elements.pop3Port?.value || '').trim();
-    const username = (elements.pop3Username?.value || '').trim();
-    const password = elements.pop3Password?.value || '';
-    const timeoutRaw = (elements.pop3Timeout?.value || '').trim();
-    const pollIntervalRaw = (elements.pop3PollInterval?.value || '').trim();
-    const useSsl = Boolean(elements.pop3UseSsl?.checked);
-
-    if (!email || !host || !portRaw || !username || !password) {
-        throw new Error('普通邮箱（POP3）配置不完整，请填写邮箱地址、服务器、端口、用户名和密码');
-    }
-
-    const port = parseInt(portRaw, 10);
-    if (!Number.isInteger(port) || port < 1 || port > 65535) {
-        throw new Error('POP3 端口无效，请填写 1-65535 之间的整数');
-    }
-
-    const timeout = parseInt(timeoutRaw || '120', 10);
-    const pollInterval = parseInt(pollIntervalRaw || '5', 10);
-
-    return {
-        email,
-        host,
-        port,
-        username,
-        password,
-        use_ssl: useSsl,
-        timeout: Number.isInteger(timeout) ? Math.max(15, timeout) : 120,
-        poll_interval: Number.isInteger(pollInterval) ? Math.max(2, pollInterval) : 5,
-    };
 }
 
 function sanitizeEmailServiceConfigForState(config) {
@@ -513,9 +408,6 @@ function setEmailServiceSelection(settings) {
     if (emailServiceType === 'tempmail') {
         candidateValues.push('tempmail:default');
     }
-    if (emailServiceType === 'pop3') {
-        candidateValues.push('pop3:manual');
-    }
     candidateValues.push(`${emailServiceType}:default`);
     candidateValues.push(emailServiceType);
 
@@ -524,27 +416,6 @@ function setEmailServiceSelection(settings) {
     if (matched) {
         elements.emailService.value = matched.value;
         handleServiceChange({ target: elements.emailService });
-    }
-}
-
-function applyPop3Config(config) {
-    if (!config || typeof config !== 'object') {
-        return;
-    }
-    if (elements.pop3Email && config.email) elements.pop3Email.value = config.email;
-    if (elements.pop3Host && config.host) elements.pop3Host.value = config.host;
-    if (elements.pop3Port && config.port) elements.pop3Port.value = String(config.port);
-    if (elements.pop3Username && config.username) elements.pop3Username.value = config.username;
-    if (elements.pop3Password && config.password) elements.pop3Password.value = config.password;
-    if (elements.pop3UseSsl) {
-        const useSslRaw = config.use_ssl;
-        elements.pop3UseSsl.checked = typeof useSslRaw === 'boolean'
-            ? useSslRaw
-            : String(useSslRaw || 'true').toLowerCase() !== 'false';
-    }
-    if (elements.pop3Timeout && config.timeout) elements.pop3Timeout.value = String(config.timeout);
-    if (elements.pop3PollInterval && config.poll_interval) {
-        elements.pop3PollInterval.value = String(config.poll_interval);
     }
 }
 
@@ -631,7 +502,6 @@ function applyRecoveredTaskSettings(taskMode, settings) {
     if (!settings) return;
 
     setEmailServiceSelection(settings);
-    applyPop3Config(settings.email_service_config);
 
     if (taskMode === 'batch' || taskMode === 'loop') {
         if (elements.regMode) {
@@ -692,17 +562,10 @@ async function handleStartRegistration(e) {
     }
 
     const [emailServiceType, serviceId] = selectedValue.split(':');
-
-    let pop3Config = null;
-    if (emailServiceType === 'pop3') {
-        try {
-            pop3Config = collectPop3Config();
-        } catch (error) {
-            const message = error instanceof Error ? error.message : 'POP3 配置校验失败';
-            toast.error(message);
-            addLog('error', `[错误] ${message}`);
-            return;
-        }
+    if (emailServiceType !== 'tempmail') {
+        toast.error('当前页面仅支持通过“邮箱服务”规则进行注册');
+        addLog('error', `[错误] 不支持的邮箱服务类型: ${emailServiceType}`);
+        return;
     }
 
     // 禁用开始按钮
@@ -715,7 +578,6 @@ async function handleStartRegistration(e) {
     // 构建请求数据（代理从设置中自动获取）
     const requestData = {
         email_service_type: emailServiceType,
-        email_service_config: pop3Config || undefined,
         auto_upload_cpa: elements.autoUploadCpa ? elements.autoUploadCpa.checked : false,
         cpa_service_ids: elements.autoUploadCpa && elements.autoUploadCpa.checked ? getSelectedServiceIds(elements.cpaServiceSelect) : [],
         auto_upload_sub2api: elements.autoUploadSub2api ? elements.autoUploadSub2api.checked : false,

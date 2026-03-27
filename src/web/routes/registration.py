@@ -1929,7 +1929,10 @@ async def get_registration_stats():
 @router.get("/available-services")
 async def get_available_email_services():
     """
-    获取可用于注册的邮箱服务列表（临时邮箱池 + 普通邮箱 POP3）
+    获取可用于注册的邮箱服务列表（仅邮箱规则池）。
+
+    说明：普通邮箱请在邮箱规则中配置 `pop3_alias` provider，
+    注册页不再暴露手填 POP3 模式。
     """
     from ...database.models import EmailService as EmailServiceModel
     settings = get_settings()
@@ -1959,6 +1962,16 @@ async def get_available_email_services():
             config = service.config or {}
             provider = str(service.provider or config.get("provider") or "tempmail_lol")
             provider_meta = get_tempmail_provider_meta(provider)
+            if provider == "pop3_alias":
+                description = (
+                    f"{provider_meta.get('label') or provider} / "
+                    f"主邮箱: {config.get('base_email') or '-'}"
+                )
+            else:
+                description = (
+                    f"{provider_meta.get('label') or provider} / "
+                    f"前缀: {config.get('address_prefix') or '-'}"
+                )
             services.append({
                 "id": service.id,
                 "name": service.name,
@@ -1968,10 +1981,7 @@ async def get_available_email_services():
                 "is_builtin": bool(service.is_builtin),
                 "is_immutable": bool(service.is_immutable),
                 "priority": service.priority,
-                "description": (
-                    f"{provider_meta.get('label') or provider} / "
-                    f"前缀: {config.get('address_prefix') or '-'}"
-                ),
+                "description": description,
             })
 
     return {
@@ -1979,18 +1989,6 @@ async def get_available_email_services():
             "available": bool(services),
             "count": len(services),
             "services": services,
-        },
-        "pop3": {
-            "available": True,
-            "count": 1,
-            "services": [
-                {
-                    "id": "manual",
-                    "name": "普通邮箱（POP3）",
-                    "type": "pop3",
-                    "description": "使用你的常规邮箱，通过 POP3 轮询验证码",
-                }
-            ],
         },
         "selection": {
             "mode": runtime_state["selection_mode"],

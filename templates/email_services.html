@@ -213,19 +213,21 @@
                         </div>
                     </div>
 
-                    <div class="form-group">
-                        <label for="rule-base-url">API 地址（留空则使用全局）</label>
-                        <input type="text" id="rule-base-url" placeholder="https://api.tempmail.lol/v2">
-                    </div>
-
-                    <div class="form-row">
+                    <div id="rule-http-config">
                         <div class="form-group">
-                            <label for="rule-address-prefix">邮箱前缀规则（可选）</label>
-                            <input type="text" id="rule-address-prefix" placeholder="例如：openai_user">
+                            <label for="rule-base-url">API 地址（留空则使用全局）</label>
+                            <input type="text" id="rule-base-url" placeholder="https://api.tempmail.lol/v2">
                         </div>
-                        <div class="form-group">
-                            <label for="rule-preferred-domain">优先域名（可选）</label>
-                            <input type="text" id="rule-preferred-domain" placeholder="例如：mail.example.com">
+
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="rule-address-prefix">邮箱前缀规则（可选）</label>
+                                <input type="text" id="rule-address-prefix" placeholder="例如：openai_user">
+                            </div>
+                            <div class="form-group">
+                                <label for="rule-preferred-domain">优先域名（可选）</label>
+                                <input type="text" id="rule-preferred-domain" placeholder="例如：mail.example.com">
+                            </div>
                         </div>
                     </div>
 
@@ -306,7 +308,7 @@
                             <label for="rule-timeout">超时时间（秒）</label>
                             <input type="number" id="rule-timeout" min="5" value="30">
                         </div>
-                        <div class="form-group">
+                        <div class="form-group" id="rule-max-retries-group">
                             <label for="rule-max-retries">最大重试次数</label>
                             <input type="number" id="rule-max-retries" min="1" value="3">
                         </div>

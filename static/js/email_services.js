@@ -19,6 +19,7 @@ const elements = {
     ruleName: document.getElementById('rule-name'),
     ruleProvider: document.getElementById('rule-provider'),
     rulePriority: document.getElementById('rule-priority'),
+    ruleHttpConfig: document.getElementById('rule-http-config'),
     ruleBaseUrl: document.getElementById('rule-base-url'),
     ruleAddressPrefix: document.getElementById('rule-address-prefix'),
     rulePreferredDomain: document.getElementById('rule-preferred-domain'),
@@ -35,6 +36,7 @@ const elements = {
     ruleSubjectKeyword: document.getElementById('rule-subject-keyword'),
     ruleSenderKeyword: document.getElementById('rule-sender-keyword'),
     ruleTimeout: document.getElementById('rule-timeout'),
+    ruleMaxRetriesGroup: document.getElementById('rule-max-retries-group'),
     ruleMaxRetries: document.getElementById('rule-max-retries'),
     ruleEnabled: document.getElementById('rule-enabled'),
     ruleEnabledHint: document.getElementById('rule-enabled-hint'),
@@ -81,6 +83,13 @@ function isPop3AliasProvider(provider) {
 
 function syncProviderSpecificFields(provider) {
     const isPop3Alias = isPop3AliasProvider(provider);
+
+    if (elements.ruleHttpConfig) {
+        elements.ruleHttpConfig.style.display = isPop3Alias ? 'none' : 'block';
+    }
+    if (elements.ruleMaxRetriesGroup) {
+        elements.ruleMaxRetriesGroup.style.display = isPop3Alias ? 'none' : 'block';
+    }
     if (elements.rulePop3Config) {
         elements.rulePop3Config.style.display = isPop3Alias ? 'block' : 'none';
     }
@@ -93,9 +102,18 @@ function syncProviderSpecificFields(provider) {
     }
     if (elements.ruleAddressPrefix) {
         elements.ruleAddressPrefix.disabled = isPop3Alias;
+        if (isPop3Alias) {
+            elements.ruleAddressPrefix.value = '';
+        }
     }
     if (elements.rulePreferredDomain) {
         elements.rulePreferredDomain.disabled = isPop3Alias;
+        if (isPop3Alias) {
+            elements.rulePreferredDomain.value = '';
+        }
+    }
+    if (elements.ruleMaxRetries) {
+        elements.ruleMaxRetries.disabled = isPop3Alias;
     }
 }
 
@@ -451,14 +469,16 @@ function renderTempmailRulesTable() {
         const providerLabel = item.provider_label || item.provider || 'Tempmail';
         const callStyle = item.provider_runtime_meta?.call_style || '';
         const summaryParts = [];
-        if (config.base_url) {
-            summaryParts.push(`API: ${escapeHtml(config.base_url)}`);
-        }
-        if (config.address_prefix) {
-            summaryParts.push(`前缀: ${escapeHtml(config.address_prefix)}`);
-        }
-        if (config.preferred_domain) {
-            summaryParts.push(`域名: ${escapeHtml(config.preferred_domain)}`);
+        if (item.provider !== 'pop3_alias') {
+            if (config.base_url) {
+                summaryParts.push(`API: ${escapeHtml(config.base_url)}`);
+            }
+            if (config.address_prefix) {
+                summaryParts.push(`前缀: ${escapeHtml(config.address_prefix)}`);
+            }
+            if (config.preferred_domain) {
+                summaryParts.push(`域名: ${escapeHtml(config.preferred_domain)}`);
+            }
         }
         if (item.provider === 'pop3_alias') {
             if (config.base_email) {
@@ -482,9 +502,12 @@ function renderTempmailRulesTable() {
                 summaryParts.push(`字符集: ${escapeHtml(charsetLabel)}`);
             }
             summaryParts.push(`SSL: ${config.use_ssl === false ? '关闭' : '开启'}`);
+            summaryParts.push(`轮询: ${Number(config.poll_interval || 5)}s`);
         }
         summaryParts.push(`超时: ${Number(config.timeout || 30)}s`);
-        summaryParts.push(`重试: ${Number(config.max_retries || 3)}`);
+        if (item.provider !== 'pop3_alias') {
+            summaryParts.push(`重试: ${Number(config.max_retries || 3)}`);
+        }
 
         const fixedTag = item.is_immutable ? '<span class="mailhub-fixed-tag">固定</span>' : '';
         const available = isRuleAvailable(item);
@@ -557,9 +580,10 @@ function openRuleModal(rule = null) {
         elements.ruleProvider.disabled = isEdit;
     }
 
-    elements.ruleBaseUrl.value = config.base_url || '';
-    elements.ruleAddressPrefix.value = config.address_prefix || '';
-    elements.rulePreferredDomain.value = config.preferred_domain || '';
+    const isPop3Alias = isPop3AliasProvider(provider);
+    elements.ruleBaseUrl.value = isPop3Alias ? '' : (config.base_url || '');
+    elements.ruleAddressPrefix.value = isPop3Alias ? '' : (config.address_prefix || '');
+    elements.rulePreferredDomain.value = isPop3Alias ? '' : (config.preferred_domain || '');
     if (elements.ruleBaseEmail) {
         elements.ruleBaseEmail.value = config.base_email || '';
     }
@@ -626,6 +650,7 @@ async function handleSaveRule(event) {
     const timeout = Number(elements.ruleTimeout.value || 30);
     const maxRetries = Number(elements.ruleMaxRetries.value || 3);
     const enableRequested = Boolean(elements.ruleEnabled.checked);
+    const isPop3Alias = isPop3AliasProvider(provider);
 
     if (!name) {
         toast.error('规则名称不能为空');
@@ -646,24 +671,10 @@ async function handleSaveRule(event) {
 
     const config = {
         provider,
-        timeout,
-        max_retries: maxRetries,
+        timeout: Number.isFinite(timeout) ? Math.max(5, timeout) : 30,
     };
-    const baseUrl = elements.ruleBaseUrl.value.trim();
-    const addressPrefix = elements.ruleAddressPrefix.value.trim();
-    const preferredDomain = elements.rulePreferredDomain.value.trim();
 
-    if (baseUrl) {
-        config.base_url = baseUrl;
-    }
-    if (addressPrefix) {
-        config.address_prefix = addressPrefix;
-    }
-    if (preferredDomain) {
-        config.preferred_domain = preferredDomain;
-    }
-
-    if (isPop3AliasProvider(provider)) {
+    if (isPop3Alias) {
         const baseEmail = (elements.ruleBaseEmail?.value || '').trim();
         const pop3Host = (elements.rulePop3Host?.value || '').trim();
         const pop3Port = Number(elements.rulePop3Port?.value || 995);
@@ -700,7 +711,23 @@ async function handleSaveRule(event) {
         if (senderKeyword) {
             config.sender_keyword = senderKeyword;
         }
-        config.base_url = '';
+    } else {
+        const normalizedMaxRetries = Number.isFinite(maxRetries) ? Math.max(1, maxRetries) : 3;
+        config.max_retries = normalizedMaxRetries;
+
+        const baseUrl = elements.ruleBaseUrl.value.trim();
+        const addressPrefix = elements.ruleAddressPrefix.value.trim();
+        const preferredDomain = elements.rulePreferredDomain.value.trim();
+
+        if (baseUrl) {
+            config.base_url = baseUrl;
+        }
+        if (addressPrefix) {
+            config.address_prefix = addressPrefix;
+        }
+        if (preferredDomain) {
+            config.preferred_domain = preferredDomain;
+        }
     }
 
     try {

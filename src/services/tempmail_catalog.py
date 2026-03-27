@@ -15,6 +15,54 @@ TEMPMAIL_PUBLIC_PROVIDER_OPTIONS = (
     "pop3_alias",
 )
 
+_HTTP_PROVIDER_TEXT_FIELDS = (
+    "address_prefix",
+    "preferred_domain",
+    "fallback_domain",
+    "api_key",
+    "auth_style",
+    "auth_placement",
+    "auth_header_name",
+    "api_key_header",
+    "auth_query_key",
+    "api_key_query_key",
+    "auth_scheme",
+    "create_method",
+    "create_path",
+    "domains_path",
+    "inbox_path",
+    "messages_path",
+    "token_path",
+)
+
+_POP3_ALIAS_TEXT_FIELDS = (
+    "base_email",
+    "pop3_host",
+    "pop3_username",
+    "pop3_password",
+    "sender_keyword",
+    "subject_keyword",
+    "alias_separator",
+    "alias_charset",
+)
+
+_POP3_ALIAS_INT_FIELDS = (
+    "pop3_port",
+    "alias_length",
+    "poll_interval",
+    "max_messages",
+)
+
+
+def _parse_int(value: Any, default: int, *, minimum: Optional[int] = None) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    if minimum is not None and parsed < minimum:
+        return minimum
+    return parsed
+
 
 def normalize_tempmail_provider(provider: Optional[str]) -> str:
     """将供应商标识归一化为内部值。"""
@@ -67,69 +115,46 @@ def build_tempmail_config(
     if provider == TEMPMAIL_DEFAULT_PROVIDER:
         default_base_url = str(getattr(settings, "tempmail_base_url", "") or default_base_url).strip()
 
-    timeout = int(source.get("timeout") or getattr(settings, "tempmail_timeout", 30) or 30)
-    max_retries = int(source.get("max_retries") or getattr(settings, "tempmail_max_retries", 3) or 3)
+    timeout = _parse_int(source.get("timeout") or getattr(settings, "tempmail_timeout", 30) or 30, 30, minimum=5)
 
     config: Dict[str, Any] = {
         "provider": provider,
-        "base_url": str(source.get("base_url") or default_base_url).strip(),
         "timeout": timeout,
-        "max_retries": max_retries,
     }
 
-    optional_text_fields = (
-        "address_prefix",
-        "preferred_domain",
-        "fallback_domain",
-        "base_email",
-        "pop3_host",
-        "pop3_username",
-        "pop3_password",
-        "sender_keyword",
-        "subject_keyword",
-        "alias_separator",
-        "alias_charset",
-        "api_key",
-        "auth_style",
-        "auth_placement",
-        "auth_header_name",
-        "api_key_header",
-        "auth_query_key",
-        "api_key_query_key",
-        "auth_scheme",
-        "create_method",
-        "create_path",
-        "domains_path",
-        "inbox_path",
-        "messages_path",
-        "token_path",
-    )
+    if provider == "pop3_alias":
+        optional_text_fields = _POP3_ALIAS_TEXT_FIELDS
+        optional_int_fields = _POP3_ALIAS_INT_FIELDS
+    else:
+        config["base_url"] = str(source.get("base_url") or default_base_url).strip()
+        config["max_retries"] = _parse_int(
+            source.get("max_retries") or getattr(settings, "tempmail_max_retries", 3) or 3,
+            3,
+            minimum=1,
+        )
+        optional_text_fields = _HTTP_PROVIDER_TEXT_FIELDS
+        optional_int_fields: tuple[str, ...] = ()
+
     for key in optional_text_fields:
         value = str(source.get(key) or "").strip()
         if value:
             config[key] = value
 
-    optional_int_fields = (
-        "pop3_port",
-        "alias_length",
-        "poll_interval",
-        "max_messages",
-    )
     for key in optional_int_fields:
         raw_value = source.get(key)
         if raw_value is None or raw_value == "":
             continue
-        try:
-            config[key] = int(raw_value)
-        except (TypeError, ValueError):
-            continue
+        parsed = _parse_int(raw_value, 0)
+        if parsed > 0:
+            config[key] = parsed
 
-    use_ssl_value = source.get("use_ssl")
-    if use_ssl_value is not None:
-        if isinstance(use_ssl_value, bool):
-            config["use_ssl"] = use_ssl_value
-        else:
-            config["use_ssl"] = str(use_ssl_value).strip().lower() in {"1", "true", "yes", "on"}
+    if provider == "pop3_alias":
+        use_ssl_value = source.get("use_ssl")
+        if use_ssl_value is not None:
+            if isinstance(use_ssl_value, bool):
+                config["use_ssl"] = use_ssl_value
+            else:
+                config["use_ssl"] = str(use_ssl_value).strip().lower() in {"1", "true", "yes", "on"}
 
     return config
 

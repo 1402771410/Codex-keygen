@@ -91,6 +91,48 @@ def test_build_tempmail_config_keeps_auth_and_call_rule_fields() -> None:
     assert config["api_key_query_key"] == "alt_key"
 
 
+def test_build_tempmail_config_pop3_alias_strips_http_fields() -> None:
+    config = build_tempmail_config(
+        {
+            "provider": "pop3_alias",
+            "timeout": 45,
+            "max_retries": 9,
+            "base_url": "https://should-not-keep.example",
+            "address_prefix": "legacy-prefix",
+            "preferred_domain": "legacy-domain.test",
+            "base_email": "123456@225.com",
+            "pop3_host": "pop.225.com",
+            "pop3_port": 995,
+            "pop3_username": "123456@225.com",
+            "pop3_password": "secret",
+            "use_ssl": True,
+            "alias_length": 10,
+            "alias_charset": "loweralnum",
+            "poll_interval": 6,
+            "max_messages": 20,
+        },
+        _settings_stub(),
+    )
+
+    assert config["provider"] == "pop3_alias"
+    assert config["timeout"] == 45
+    assert config["base_email"] == "123456@225.com"
+    assert config["pop3_host"] == "pop.225.com"
+    assert config["pop3_port"] == 995
+    assert config["pop3_username"] == "123456@225.com"
+    assert config["pop3_password"] == "secret"
+    assert config["use_ssl"] is True
+    assert config["alias_length"] == 10
+    assert config["alias_charset"] == "loweralnum"
+    assert config["poll_interval"] == 6
+    assert config["max_messages"] == 20
+
+    assert "base_url" not in config
+    assert "max_retries" not in config
+    assert "address_prefix" not in config
+    assert "preferred_domain" not in config
+
+
 def test_onesecmail_create_falls_back_after_403_random_mailbox() -> None:
     service = TempmailService({"provider": "onesecmail", "base_url": "https://www.1secmail.com/api/v1/"})
 

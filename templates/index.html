@@ -160,50 +160,8 @@
                                         <select id="email-service" name="email_service" required>
                                             <option value="tempmail:default">Tempmail.lol (临时邮箱)</option>
                                         </select>
-                                    </div>
-
-                                    <div id="pop3-config-group" style="display: none; padding: var(--semi-spacing-3); border: 1px dashed var(--semi-border-color); border-radius: var(--semi-border-radius-medium); margin-bottom: var(--semi-spacing-3); background: var(--semi-color-fill-0);">
-                                        <div style="font-weight: 600; margin-bottom: var(--semi-spacing-2);">普通邮箱（POP3）配置</div>
-                                        <div class="form-group">
-                                            <label for="pop3-email">邮箱地址</label>
-                                            <input type="email" id="pop3-email" placeholder="例如：user@example.com" autocomplete="off">
-                                        </div>
-                                        <div class="form-group">
-                                            <label for="pop3-host">POP3 服务器</label>
-                                            <input type="text" id="pop3-host" placeholder="例如：pop.example.com" autocomplete="off">
-                                        </div>
-                                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--semi-spacing-2);">
-                                            <div class="form-group">
-                                                <label for="pop3-port">端口</label>
-                                                <input type="number" id="pop3-port" value="995" min="1" max="65535">
-                                            </div>
-                                            <div class="form-group" style="display: flex; align-items: end;">
-                                                <label style="display: flex; align-items: center; gap: var(--semi-spacing-2); margin-bottom: var(--semi-spacing-2); cursor: pointer;">
-                                                    <input type="checkbox" id="pop3-use-ssl" checked>
-                                                    <span>使用 SSL</span>
-                                                </label>
-                                            </div>
-                                        </div>
-                                        <div class="form-group">
-                                            <label for="pop3-username">POP3 用户名</label>
-                                            <input type="text" id="pop3-username" placeholder="通常为邮箱账号" autocomplete="off">
-                                        </div>
-                                        <div class="form-group">
-                                            <label for="pop3-password">POP3 密码 / 授权码</label>
-                                            <input type="password" id="pop3-password" placeholder="请输入 POP3 密码或授权码" autocomplete="new-password">
-                                        </div>
-                                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--semi-spacing-2);">
-                                            <div class="form-group">
-                                                <label for="pop3-timeout">验证码等待超时（秒）</label>
-                                                <input type="number" id="pop3-timeout" value="120" min="15" max="600">
-                                            </div>
-                                            <div class="form-group">
-                                                <label for="pop3-poll-interval">轮询间隔（秒）</label>
-                                                <input type="number" id="pop3-poll-interval" value="5" min="2" max="60">
-                                            </div>
-                                        </div>
                                         <small style="color: var(--semi-color-text-3); font-size: 0.7857rem;">
-                                            使用普通邮箱模式时，系统会通过 POP3 轮询收件箱提取验证码。
+                                            普通邮箱请在“邮箱服务”页面配置“普通邮箱 POP3+Alias”规则并测试通过后再使用。
                                         </small>
                                     </div>
 
