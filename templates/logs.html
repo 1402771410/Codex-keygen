@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>日志中心 - OpenAI 注册系统</title>
+    <link rel="stylesheet" href="https://unpkg.com/@douyinfe/semi-ui@2.72.0/dist/css/semi.min.css">
+    <link rel="stylesheet" href="/static/css/style.css?v={{ static_version }}">
+</head>
+<body class="logs-page">
+    <div class="app-shell">
+        <aside class="sidebar">
+            <div class="sidebar-brand">
+                <div class="sidebar-brand-icon">🚀</div>
+                <span class="sidebar-brand-text">OpenAI 注册</span>
+            </div>
+
+            <nav class="sidebar-nav">
+                <div class="sidebar-section">
+                    <div class="sidebar-section-title">控制台</div>
+                    <a href="/" class="sidebar-link">
+                        <span class="sidebar-link-icon">📝</span>
+                        <span>注册</span>
+                    </a>
+                    <a href="/accounts" class="sidebar-link">
+                        <span class="sidebar-link-icon">📋</span>
+                        <span>账号管理</span>
+                    </a>
+                    <a href="/email-services" class="sidebar-link">
+                        <span class="sidebar-link-icon">📮</span>
+                        <span>邮箱服务</span>
+                    </a>
+                </div>
+
+                <div class="sidebar-section">
+                    <div class="sidebar-section-title">工具</div>
+                    <a href="/payment" class="sidebar-link">
+                        <span class="sidebar-link-icon">💳</span>
+                        <span>支付升级</span>
+                    </a>
+                    <a href="/settings" class="sidebar-link">
+                        <span class="sidebar-link-icon">⚙️</span>
+                        <span>系统设置</span>
+                    </a>
+                    <a href="/logs" class="sidebar-link active">
+                        <span class="sidebar-link-icon">🧾</span>
+                        <span>日志中心</span>
+                    </a>
+                </div>
+            </nav>
+
+            <div class="sidebar-footer">
+                <button type="button" class="theme-toggle-btn" onclick="theme.toggle()" title="切换主题" aria-label="切换主题">
+                    <span data-theme-icon aria-hidden="true">🌙</span>
+                </button>
+                <a href="/logout" class="logout-link">退出</a>
+            </div>
+        </aside>
+
+        <main class="main-wrapper">
+            <header class="page-header-bar">
+                <div class="page-title-section">
+                    <h1>🧾 日志中心</h1>
+                    <p>集中查看运行日志与操作日志，便于排查问题与审计行为。</p>
+                </div>
+            </header>
+
+            <div class="page-content">
+                <div class="stats-grid">
+                    <div class="stat-card info">
+                        <div class="stat-value" id="run-log-count">0</div>
+                        <div class="stat-label">运行日志条数</div>
+                    </div>
+                    <div class="stat-card success">
+                        <div class="stat-value" id="operation-log-count">0</div>
+                        <div class="stat-label">操作日志条数</div>
+                    </div>
+                    <div class="stat-card warning">
+                        <div class="stat-value" id="last-refresh-time">--</div>
+                        <div class="stat-label">最近刷新</div>
+                    </div>
+                </div>
+
+                <div class="card" style="margin-bottom: var(--semi-spacing-4);">
+                    <div class="card-body toolbar">
+                        <div class="toolbar-left">
+                            <label style="display:flex;align-items:center;gap:var(--semi-spacing-2);">
+                                <span>运行日志级别</span>
+                                <select id="run-log-level" class="form-select">
+                                    <option value="">全部</option>
+                                    <option value="DEBUG">DEBUG</option>
+                                    <option value="INFO">INFO</option>
+                                    <option value="WARNING">WARNING</option>
+                                    <option value="ERROR">ERROR</option>
+                                </select>
+                            </label>
+                            <label style="display:flex;align-items:center;gap:var(--semi-spacing-2);">
+                                <span>运行日志条数</span>
+                                <select id="run-log-lines" class="form-select">
+                                    <option value="100">100</option>
+                                    <option value="200" selected>200</option>
+                                    <option value="500">500</option>
+                                </select>
+                            </label>
+                            <input type="text" id="run-log-keyword" class="form-input" placeholder="运行日志关键词过滤" style="min-width: 220px;">
+                            <input type="text" id="operation-log-keyword" class="form-input" placeholder="操作日志关键词过滤" style="min-width: 220px;">
+                            <select id="operation-log-category" class="form-select">
+                                <option value="">操作类别：全部</option>
+                                <option value="registration">注册流程</option>
+                                <option value="tempmail">临时邮箱</option>
+                            </select>
+                        </div>
+                        <div class="toolbar-right">
+                            <label style="display:flex;align-items:center;gap:var(--semi-spacing-2);font-size:0.8571rem;color:var(--semi-color-text-2);">
+                                <input type="checkbox" id="auto-refresh-logs" checked>
+                                自动刷新
+                            </label>
+                            <button type="button" class="btn btn-primary" id="refresh-logs-btn">🔄 立即刷新</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card" style="margin-bottom: var(--semi-spacing-4);">
+                    <div class="card-header">
+                        <h3>运行日志</h3>
+                        <span class="hint" id="run-log-file">日志文件：--</span>
+                    </div>
+                    <div class="card-body no-padding">
+                        <div class="table-container">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th style="width: 160px;">时间</th>
+                                        <th style="width: 90px;">级别</th>
+                                        <th style="width: 180px;">来源</th>
+                                        <th>内容</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="run-logs-table">
+                                    <tr>
+                                        <td colspan="4">
+                                            <div class="empty-state">
+                                                <div class="empty-state-title">正在加载运行日志...</div>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <h3>操作日志</h3>
+                        <span class="hint">来自注册任务与临时邮箱测试动作</span>
+                    </div>
+                    <div class="card-body no-padding">
+                        <div class="table-container">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th style="width: 160px;">时间</th>
+                                        <th style="width: 100px;">类别</th>
+                                        <th style="width: 130px;">动作</th>
+                                        <th style="width: 180px;">标题</th>
+                                        <th>详情</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="operation-logs-table">
+                                    <tr>
+                                        <td colspan="5">
+                                            <div class="empty-state">
+                                                <div class="empty-state-title">正在加载操作日志...</div>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="/static/js/utils.js?v={{ static_version }}"></script>
+    <script src="/static/js/logs.js?v={{ static_version }}"></script>
+</body>
+</html>

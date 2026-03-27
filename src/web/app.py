@@ -192,6 +192,13 @@ def create_app() -> FastAPI:
             return _redirect_to_login(request)
         return templates.TemplateResponse("payment.html", {"request": request})
 
+    @app.get("/logs", response_class=HTMLResponse)
+    async def logs_page(request: Request):
+        """日志页面"""
+        if not _is_authenticated(request):
+            return _redirect_to_login(request)
+        return templates.TemplateResponse("logs.html", {"request": request})
+
     @app.on_event("startup")
     async def startup_event():
         """应用启动事件"""
