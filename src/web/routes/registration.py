@@ -204,11 +204,41 @@ def _normalize_email_service_config(
         settings = get_settings()
         provider_hint = str(normalized.get("provider") or "").strip() or None
         normalized = build_tempmail_config(normalized, settings, provider_hint=provider_hint)
+    elif service_type == EmailServiceType.POP3:
+        use_ssl_raw = normalized.get("use_ssl")
+        if isinstance(use_ssl_raw, bool):
+            use_ssl = use_ssl_raw
+        else:
+            use_ssl = str(use_ssl_raw or "true").strip().lower() in {"1", "true", "yes", "on"}
+
+        default_port = 995 if use_ssl else 110
+        normalized = {
+            **normalized,
+            "host": str(normalized.get("host") or "").strip(),
+            "port": int(normalized.get("port") or default_port),
+            "username": str(normalized.get("username") or "").strip(),
+            "password": str(normalized.get("password") or ""),
+            "email": str(normalized.get("email") or normalized.get("username") or "").strip(),
+            "use_ssl": use_ssl,
+            "poll_interval": max(2, int(normalized.get("poll_interval") or 5)),
+            "timeout": max(15, int(normalized.get("timeout") or 120)),
+            "max_messages": max(1, int(normalized.get("max_messages") or 30)),
+            "subject_keyword": str(normalized.get("subject_keyword") or "").strip(),
+            "sender_keyword": str(normalized.get("sender_keyword") or "").strip(),
+        }
 
     if proxy_url and 'proxy_url' not in normalized:
         normalized['proxy_url'] = proxy_url
 
     return normalized
+
+
+def _validate_pop3_registration_config(config: Dict[str, Any]) -> None:
+    """校验 POP3 注册所需配置。"""
+    required_fields = ("host", "port", "username", "password", "email")
+    missing = [field for field in required_fields if not config.get(field)]
+    if missing:
+        raise ValueError(f"POP3 配置缺少必填项: {', '.join(missing)}")
 
 
 def _parse_hhmm(value: str) -> Tuple[int, int]:
@@ -366,32 +396,43 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
             # 更新任务的代理记录
             crud.update_registration_task(db, task_uuid, proxy=actual_proxy_url)
 
-            # 创建邮箱服务（仅保留临时邮箱）
+            # 创建邮箱服务（支持临时邮箱池 + 普通邮箱 POP3）
             service_type = EmailServiceType(email_service_type)
-            if service_type != EmailServiceType.TEMPMAIL:
-                raise ValueError("当前仅支持临时邮箱注册")
-
             settings = get_settings()
-            selected_service = _select_and_mark_tempmail_service(db, settings, email_service_id)
+            selected_is_global_tempmail = False
 
-            if not selected_service:
-                raise ValueError("没有可用的启用临时邮箱服务，请先在临时邮箱池中启用至少一个服务")
+            if service_type == EmailServiceType.TEMPMAIL:
+                selected_service = _select_and_mark_tempmail_service(db, settings, email_service_id)
 
-            service_type = EmailServiceType.TEMPMAIL
-            selected_config = dict(cast(dict, selected_service.config or {}))
-            provider = str(selected_service.provider or selected_config.get("provider") or "tempmail_lol")
-            selected_config["provider"] = provider
-            selected_is_global_tempmail = is_global_tempmail_service(selected_service)
-            config = _normalize_email_service_config(service_type, selected_config, actual_proxy_url)
-            crud.update_registration_task(db, task_uuid, email_service_id=selected_service.id)
-            provider_meta = get_tempmail_provider_meta(provider)
-            logger.info(
-                "使用临时邮箱池服务: %s (ID: %s, provider: %s, priority: %s)",
-                selected_service.name,
-                selected_service.id,
-                provider_meta.get("label") or provider,
-                selected_service.priority,
-            )
+                if not selected_service:
+                    raise ValueError("没有可用的启用临时邮箱服务，请先在临时邮箱池中启用至少一个服务")
+
+                selected_config = dict(cast(dict, selected_service.config or {}))
+                provider = str(selected_service.provider or selected_config.get("provider") or "tempmail_lol")
+                selected_config["provider"] = provider
+                selected_is_global_tempmail = is_global_tempmail_service(selected_service)
+                config = _normalize_email_service_config(service_type, selected_config, actual_proxy_url)
+                crud.update_registration_task(db, task_uuid, email_service_id=selected_service.id)
+                provider_meta = get_tempmail_provider_meta(provider)
+                logger.info(
+                    "使用临时邮箱池服务: %s (ID: %s, provider: %s, priority: %s)",
+                    selected_service.name,
+                    selected_service.id,
+                    provider_meta.get("label") or provider,
+                    selected_service.priority,
+                )
+            elif service_type == EmailServiceType.POP3:
+                raw_config = dict(cast(dict, email_service_config or {}))
+                config = _normalize_email_service_config(service_type, raw_config, actual_proxy_url)
+                _validate_pop3_registration_config(config)
+                logger.info(
+                    "使用 POP3 普通邮箱接收验证码: %s@%s:%s",
+                    config.get("username"),
+                    config.get("host"),
+                    config.get("port"),
+                )
+            else:
+                raise ValueError(f"当前不支持该邮箱服务类型: {service_type.value}")
 
             email_service = EmailServiceFactory.create(service_type, config)
 
@@ -870,10 +911,12 @@ def _format_wait_seconds(seconds: int) -> str:
 
 def _build_single_settings_snapshot(request: RegistrationTaskCreate) -> Dict[str, Any]:
     """构建单任务设置快照，供页面重连恢复。"""
+    email_service_config = _sanitize_email_service_config_for_snapshot(request.email_service_config)
     return {
         "registration_mode": "single",
         "email_service_type": request.email_service_type,
         "email_service_id": request.email_service_id,
+        "email_service_config": email_service_config,
         "proxy": request.proxy,
         "auto_upload_cpa": request.auto_upload_cpa,
         "cpa_service_ids": request.cpa_service_ids,
@@ -891,11 +934,13 @@ def _build_batch_settings_snapshot(
     normalized_window_end: Optional[str] = None,
 ) -> Dict[str, Any]:
     """构建批量/循环任务设置快照。"""
+    email_service_config = _sanitize_email_service_config_for_snapshot(request.email_service_config)
     return {
         "registration_mode": request.registration_mode,
         "count": request.count,
         "email_service_type": request.email_service_type,
         "email_service_id": request.email_service_id,
+        "email_service_config": email_service_config,
         "proxy": request.proxy,
         "interval_min": request.interval_min,
         "interval_max": request.interval_max,
@@ -910,6 +955,18 @@ def _build_batch_settings_snapshot(
         "auto_upload_tm": request.auto_upload_tm,
         "tm_service_ids": request.tm_service_ids,
     }
+
+
+def _sanitize_email_service_config_for_snapshot(config: Optional[dict]) -> Optional[Dict[str, Any]]:
+    """对邮箱配置进行脱敏后再写入任务快照。"""
+    if not config:
+        return None
+
+    sanitized = dict(config)
+    for secret_key in ("password", "api_key", "api_token", "token"):
+        if secret_key in sanitized:
+            sanitized[secret_key] = ""
+    return sanitized
 
 
 def _is_terminal_status(status: str) -> bool:
@@ -1423,7 +1480,7 @@ async def start_registration(
     """
     启动注册任务
 
-    - email_service_type: 邮箱服务类型（仅支持 tempmail）
+    - email_service_type: 邮箱服务类型（支持 tempmail / pop3）
     - proxy: 代理地址
     - email_service_config: 邮箱服务配置
     """
@@ -1872,7 +1929,7 @@ async def get_registration_stats():
 @router.get("/available-services")
 async def get_available_email_services():
     """
-    获取可用于注册的邮箱服务列表（仅临时邮箱）
+    获取可用于注册的邮箱服务列表（临时邮箱池 + 普通邮箱 POP3）
     """
     from ...database.models import EmailService as EmailServiceModel
     settings = get_settings()
@@ -1922,6 +1979,18 @@ async def get_available_email_services():
             "available": bool(services),
             "count": len(services),
             "services": services,
+        },
+        "pop3": {
+            "available": True,
+            "count": 1,
+            "services": [
+                {
+                    "id": "manual",
+                    "name": "普通邮箱（POP3）",
+                    "type": "pop3",
+                    "description": "使用你的常规邮箱，通过 POP3 轮询验证码",
+                }
+            ],
         },
         "selection": {
             "mode": runtime_state["selection_mode"],

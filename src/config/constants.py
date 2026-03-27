@@ -32,6 +32,7 @@ class TaskStatus(str, Enum):
 class EmailServiceType(str, Enum):
     """邮箱服务类型"""
     TEMPMAIL = "tempmail"
+    POP3 = "pop3"
 
 
 # ============================================================================

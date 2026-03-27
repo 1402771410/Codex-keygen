@@ -8,10 +8,12 @@ from .base import (
     EmailServiceType,
     create_email_service,
 )
+from .pop3_email import Pop3EmailService
 from .tempmail import TempmailService
 
-# 仅保留临时邮箱服务
+# 邮箱服务注册
 EmailServiceFactory.register(EmailServiceType.TEMPMAIL, TempmailService)
+EmailServiceFactory.register(EmailServiceType.POP3, Pop3EmailService)
 
 __all__ = [
     "BaseEmailService",
@@ -20,5 +22,6 @@ __all__ = [
     "EmailServiceFactory",
     "create_email_service",
     "EmailServiceType",
+    "Pop3EmailService",
     "TempmailService",
 ]
