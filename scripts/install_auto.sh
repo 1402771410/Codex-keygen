@@ -283,6 +283,47 @@ ensure_repo() {
 }
 
 install_keygen_launcher() {
+    local os_name
+    os_name="$(detect_os)"
+
+    if [[ "$os_name" == "windows" ]]; then
+        local install_dir_win="$INSTALL_DIR"
+        if command -v cygpath >/dev/null 2>&1; then
+            install_dir_win="$(cygpath -w "$INSTALL_DIR")"
+        fi
+
+        local launcher_path="$HOME/keygen.bat"
+        cat > "$launcher_path" <<EOF
+@echo off
+setlocal
+set "KEYGEN_HOME=$install_dir_win"
+set "KEYGEN_LAUNCHER=keygen"
+if exist "%KEYGEN_HOME%\.venv\Scripts\python.exe" (
+    "%KEYGEN_HOME%\.venv\Scripts\python.exe" "%KEYGEN_HOME%\scripts\keygen.py" %*
+) else (
+    where py >nul 2>nul
+    if %errorlevel%==0 (
+        py -3 "%KEYGEN_HOME%\scripts\keygen.py" %*
+    ) else (
+        python "%KEYGEN_HOME%\scripts\keygen.py" %*
+    )
+)
+EOF
+
+        say "已安装 Windows 管理命令：$launcher_path"
+        if [[ "$TTY_INTERACTIVE" == "1" ]] && ask_yes_no "是否自动将 %USERPROFILE% 加入 PATH 以便在 CMD 直接运行 keygen？" 1; then
+            if command -v powershell.exe >/dev/null 2>&1; then
+                powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '$p=[Environment]::GetEnvironmentVariable("Path","User"); if([string]::IsNullOrWhiteSpace($p)){ $p="" }; if(-not (($p -split ";") -contains $env:USERPROFILE)){ [Environment]::SetEnvironmentVariable("Path", (($p.TrimEnd(";") + ";" + $env:USERPROFILE).Trim(";")), "User") }'
+                say "PATH 已更新，请重新打开 CMD/PowerShell 后使用 keygen。"
+            else
+                say "未检测到 powershell.exe，请手动将 %USERPROFILE% 加入 PATH。"
+            fi
+        fi
+
+        say "Windows 终端中可直接运行：keygen"
+        return 0
+    fi
+
     local bin_dir="$HOME/.local/bin"
     local launcher_path="$bin_dir/keygen"
     mkdir -p "$bin_dir"
@@ -361,16 +402,23 @@ ensure_linux_mode_choice_arg() {
 
     local choice=""
     while true; do
-        printf "Linux 安装模式请选择 [local/docker]: " > /dev/tty
+        printf "Linux 安装模式请选择:\n1) 本地部署\n2) Docker 部署\n请输入选项 [1/2]: " > /dev/tty
         IFS= read -r choice < /dev/tty || true
-        choice="${choice,,}"
         choice="${choice// /}"
+        if [[ "$choice" == "1" ]]; then
+            choice="local"
+        elif [[ "$choice" == "2" ]]; then
+            choice="docker"
+        else
+            choice="${choice,,}"
+        fi
+
         if [[ "$choice" == "local" || "$choice" == "docker" ]]; then
             EXTRA_ARGS+=("--mode" "$choice")
             say "已选择 Linux 安装模式：$choice"
             return 0
         fi
-        echo "请输入 local 或 docker" > /dev/tty
+        echo "请输入 1 或 2" > /dev/tty
     done
 }
 
