@@ -7,7 +7,8 @@
 2. 一键部署（Windows/macOS/Linux）
 3. Linux 下支持 Docker / 本地二选一；缺 Docker 时可引导安装
 4. 一键升级（git 拉取 + 按模式更新）
-5. 交互式配置面板（端口、登录账号、密码等）
+5. 一键卸载（按模式移除部署产物）
+6. 交互式配置面板（端口、登录账号、密码等）
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ import json
 import os
 import platform
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -32,6 +34,14 @@ RUNTIME_CONFIG_PATH = ROOT_DIR / "runtime-config.json"
 DOTENV_PATH = ROOT_DIR / ".env"
 DOCKER_ENV_PATH = ROOT_DIR / ".env.docker"
 REQUIREMENTS_PATH = ROOT_DIR / "requirements.txt"
+DATA_DIR = ROOT_DIR / "data"
+LOGS_DIR = ROOT_DIR / "logs"
+LOCAL_PID_PATH = DATA_DIR / "webui.pid"
+LOCAL_STDOUT_LOG = LOGS_DIR / "webui.stdout.log"
+LOCAL_STDERR_LOG = LOGS_DIR / "webui.stderr.log"
+AUTOSTART_WINDOWS_NAME = "codex-keygen-webui.bat"
+AUTOSTART_LINUX_SERVICE = "codex-keygen-webui.service"
+AUTOSTART_MACOS_PLIST = "com.codex.keygen.webui.plist"
 
 
 DEFAULT_CONFIG: Dict[str, Any] = {
@@ -500,7 +510,12 @@ def maybe_sync_repo_before_deploy(interactive: bool) -> None:
 
     print("检测到当前目录代码落后远程分支，部署旧代码可能导致容器启动失败。")
     if not interactive:
-        print("非交互模式下将继续使用当前代码部署。建议先执行：git pull --ff-only")
+        print("非交互模式下将自动执行 git pull --ff-only，同步后继续部署。")
+        pull_result = run_command(["git", "pull", "--ff-only"], check=False)
+        if pull_result.returncode == 0:
+            print("代码已自动更新。")
+        else:
+            print("git pull 失败，将继续使用当前代码部署。")
         return
 
     if ask_yes_no("是否现在自动执行 git pull --ff-only 后继续部署？", default_yes=True):
@@ -612,7 +627,7 @@ def install_docker_on_linux(auto_yes: bool = False) -> bool:
     return False
 
 
-def install_local_dependencies() -> None:
+def install_local_dependencies(interactive: bool = True) -> None:
     print_section("安装本地依赖")
     python_cmd = list(resolve_python_command())
 
@@ -625,6 +640,9 @@ def install_local_dependencies() -> None:
     pip_cmd = python_cmd + ["-m", "pip"]
     pip_check = run_command(pip_cmd + ["--version"], check=False)
     if pip_check.returncode != 0:
+        if interactive and not ask_yes_no("未检测到 pip，是否自动安装 pip？", default_yes=True):
+            raise DeployError("缺少 pip，且用户拒绝自动安装")
+
         print("未检测到 pip，尝试通过 ensurepip 自动安装...")
         ensurepip_result = run_command(python_cmd + ["-m", "ensurepip", "--upgrade"], check=False)
         if ensurepip_result.returncode != 0:
@@ -640,6 +658,9 @@ def install_local_dependencies() -> None:
     install_result = run_command(install_cmd, check=False)
 
     if install_result.returncode != 0:
+        if interactive and not ask_yes_no("依赖安装失败，是否自动修复并重试？", default_yes=True):
+            raise DeployError("依赖安装失败，且用户取消自动修复")
+
         print("依赖安装失败，已自动升级安装工具后重试一次...")
         run_command(pip_cmd + ["install", "--upgrade", "pip", "setuptools", "wheel"], check=False)
         run_command(install_cmd, check=True)
@@ -685,7 +706,7 @@ if exist "%~dp0\\.venv\\Scripts\\python.exe" (
 
 def deploy_local(config: Dict[str, Any], interactive: bool) -> None:
     print_section("本地部署")
-    install_local_dependencies()
+    install_local_dependencies(interactive=interactive)
     sync_env_files(config)
     create_local_launchers()
     run_local_preflight()
@@ -715,6 +736,498 @@ def deploy_docker(config: Dict[str, Any]) -> None:
     print(f"- 配置文件：{RUNTIME_CONFIG_PATH}")
     print(f"- Docker 环境文件：{DOCKER_ENV_PATH}")
     print(f"- 访问地址：http://127.0.0.1:{config['port']}")
+
+
+def remove_path_if_exists(path: Path) -> bool:
+    """删除文件或目录（若存在），返回是否执行了删除。"""
+    if not path.exists():
+        return False
+
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+    return True
+
+
+def ensure_runtime_dirs() -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def read_local_pid() -> Optional[int]:
+    if not LOCAL_PID_PATH.exists():
+        return None
+
+    try:
+        pid = int(str(LOCAL_PID_PATH.read_text(encoding="utf-8")).strip())
+    except (OSError, ValueError):
+        return None
+
+    return pid if pid > 0 else None
+
+
+def write_local_pid(pid: int) -> None:
+    ensure_runtime_dirs()
+    LOCAL_PID_PATH.write_text(f"{pid}\n", encoding="utf-8")
+
+
+def clear_local_pid() -> None:
+    if LOCAL_PID_PATH.exists():
+        LOCAL_PID_PATH.unlink()
+
+
+def is_local_process_running(pid: Optional[int]) -> bool:
+    if not pid or pid <= 0:
+        return False
+
+    if detect_os() == "windows":
+        result = run_command_capture(["tasklist", "/FI", f"PID eq {pid}"], check=False)
+        return result.returncode == 0 and str(pid) in (result.stdout or "")
+
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def build_webui_command(config: Dict[str, Any]) -> Sequence[str]:
+    cfg = normalize_config(config)
+    command = list(resolve_python_command()) + [
+        "webui.py",
+        "--host",
+        str(cfg["host"]),
+        "--port",
+        str(cfg["port"]),
+        "--access-username",
+        str(cfg["access_username"]),
+        "--access-password",
+        str(cfg["access_password"]),
+        "--log-level",
+        str(cfg["log_level"]),
+    ]
+
+    if bool(cfg.get("debug")):
+        command.append("--debug")
+
+    return command
+
+
+def start_local_service(config: Dict[str, Any]) -> None:
+    ensure_runtime_dirs()
+    existing_pid = read_local_pid()
+    if is_local_process_running(existing_pid):
+        print(f"本地服务已在运行（PID={existing_pid}）")
+        return
+
+    if existing_pid and not is_local_process_running(existing_pid):
+        clear_local_pid()
+
+    command = list(build_webui_command(config))
+    print_section("启动本地服务")
+    print(f"启动命令：{format_command(command)}")
+
+    with LOCAL_STDOUT_LOG.open("ab") as stdout_file, LOCAL_STDERR_LOG.open("ab") as stderr_file:
+        if detect_os() == "windows":
+            creation_flags = 0
+            creation_flags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            creation_flags |= getattr(subprocess, "DETACHED_PROCESS", 0)
+            process = subprocess.Popen(
+                command,
+                cwd=str(ROOT_DIR),
+                stdout=stdout_file,
+                stderr=stderr_file,
+                creationflags=creation_flags,
+            )
+        else:
+            process = subprocess.Popen(
+                command,
+                cwd=str(ROOT_DIR),
+                stdout=stdout_file,
+                stderr=stderr_file,
+                start_new_session=True,
+            )
+
+    write_local_pid(process.pid)
+    time.sleep(1.5)
+    if not is_local_process_running(process.pid):
+        clear_local_pid()
+        raise DeployError("本地服务启动失败，请查看 logs/webui.stderr.log")
+
+    cfg = normalize_config(config)
+    print(f"本地服务启动成功（PID={process.pid}）")
+    print(f"访问地址：http://127.0.0.1:{cfg['port']}")
+
+
+def stop_local_service() -> None:
+    print_section("停止本地服务")
+    pid = read_local_pid()
+    if not pid:
+        print("未发现本地服务 PID 记录。")
+        return
+
+    if not is_local_process_running(pid):
+        print(f"PID={pid} 已不在运行，清理 PID 记录。")
+        clear_local_pid()
+        return
+
+    if detect_os() == "windows":
+        run_command(["taskkill", "/PID", str(pid), "/T", "/F"], check=False)
+    else:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            if not is_local_process_running(pid):
+                break
+            time.sleep(0.5)
+
+        if is_local_process_running(pid):
+            try:
+                os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
+            except OSError:
+                pass
+
+    clear_local_pid()
+    print("本地服务已停止。")
+
+
+def restart_local_service(config: Dict[str, Any]) -> None:
+    stop_local_service()
+    start_local_service(config)
+
+
+def print_local_service_status(config: Dict[str, Any]) -> None:
+    print_section("本地服务状态")
+    pid = read_local_pid()
+    running = is_local_process_running(pid)
+    print(f"PID 文件：{LOCAL_PID_PATH}")
+    print(f"当前 PID：{pid or '(无)'}")
+    print(f"运行状态：{'运行中' if running else '未运行'}")
+    print(f"stdout 日志：{LOCAL_STDOUT_LOG}")
+    print(f"stderr 日志：{LOCAL_STDERR_LOG}")
+
+    if running:
+        cfg = normalize_config(config)
+        url = f"http://127.0.0.1:{cfg['port']}/login"
+        ok, detail = wait_http_ready(url, timeout_seconds=6, interval_seconds=2)
+        if ok:
+            print(f"健康检查：通过（{detail}）")
+        else:
+            print(f"健康检查：失败（{detail}）")
+
+
+def resolve_compose_with_env() -> Sequence[str]:
+    compose_cmd = resolve_compose_command()
+    if compose_cmd is None:
+        raise DeployError("未检测到 docker compose，请先安装 Docker")
+    return list(compose_cmd) + ["--env-file", str(DOCKER_ENV_PATH)]
+
+
+def start_docker_service(config: Dict[str, Any]) -> None:
+    print_section("启动 Docker 服务")
+    sync_env_files(config)
+    compose_cmd = list(resolve_compose_with_env())
+    run_command(compose_cmd + ["up", "-d", "--build"])
+    run_docker_health_check(config=config, compose_cmd=compose_cmd)
+    print("Docker 服务启动成功。")
+
+
+def stop_docker_service() -> None:
+    print_section("停止 Docker 服务")
+    compose_cmd = list(resolve_compose_with_env())
+    run_command(compose_cmd + ["stop"], check=False)
+    print("Docker 服务已停止。")
+
+
+def restart_docker_service(config: Dict[str, Any]) -> None:
+    print_section("重启 Docker 服务")
+    sync_env_files(config)
+    compose_cmd = list(resolve_compose_with_env())
+    run_command(compose_cmd + ["restart"], check=False)
+    run_docker_health_check(config=config, compose_cmd=compose_cmd)
+    print("Docker 服务重启完成。")
+
+
+def print_docker_service_status() -> None:
+    print_section("Docker 服务状态")
+    compose_cmd = list(resolve_compose_with_env())
+    run_command_capture(compose_cmd + ["ps"], check=False)
+
+
+def resolve_mode_for_operations(mode: str, config: Dict[str, Any], interactive: bool) -> str:
+    if mode in {"docker", "local"}:
+        return mode
+
+    last_mode = str(config.get("last_deploy_mode") or "").strip().lower()
+    if last_mode in {"docker", "local"}:
+        if not interactive:
+            return last_mode
+        if ask_yes_no(f"检测到上次部署模式为 {last_mode}，是否继续使用该模式？", default_yes=True):
+            return last_mode
+
+    return choose_mode("auto", config, interactive=interactive)
+
+
+def do_start(mode: str, interactive: bool = True) -> None:
+    config = load_config()
+    selected_mode = resolve_mode_for_operations(mode, config, interactive=interactive)
+
+    if selected_mode == "docker":
+        if detect_os() == "linux" and not docker_ready():
+            installed = install_docker_on_linux(auto_yes=not interactive)
+            if not installed:
+                raise DeployError("Docker 不可用，无法启动 Docker 模式")
+        start_docker_service(config)
+    else:
+        sync_env_files(config)
+        create_local_launchers()
+        start_local_service(config)
+
+    config["last_deploy_mode"] = selected_mode
+    save_config(config)
+
+
+def do_stop(mode: str, interactive: bool = True) -> None:
+    config = load_config()
+    selected_mode = resolve_mode_for_operations(mode, config, interactive=interactive)
+
+    if selected_mode == "docker":
+        stop_docker_service()
+    else:
+        stop_local_service()
+
+
+def do_restart(mode: str, interactive: bool = True) -> None:
+    config = load_config()
+    selected_mode = resolve_mode_for_operations(mode, config, interactive=interactive)
+
+    if selected_mode == "docker":
+        restart_docker_service(config)
+    else:
+        sync_env_files(config)
+        create_local_launchers()
+        restart_local_service(config)
+
+    config["last_deploy_mode"] = selected_mode
+    save_config(config)
+
+
+def do_status(mode: str, interactive: bool = False) -> None:
+    config = load_config()
+
+    if mode == "auto" and not interactive:
+        print_section("当前模式推断")
+        print(f"上次部署模式：{config.get('last_deploy_mode') or '(未记录)'}")
+        print_local_service_status(config)
+        if docker_ready():
+            print_docker_service_status()
+        else:
+            print("\nDocker 状态：未检测到 Docker 环境")
+        return
+
+    selected_mode = resolve_mode_for_operations(mode, config, interactive=interactive)
+    if selected_mode == "docker":
+        print_docker_service_status()
+    else:
+        print_local_service_status(config)
+
+
+def _linux_autostart_service_path() -> Path:
+    return Path.home() / ".config" / "systemd" / "user" / AUTOSTART_LINUX_SERVICE
+
+
+def _macos_autostart_plist_path() -> Path:
+    return Path.home() / "Library" / "LaunchAgents" / AUTOSTART_MACOS_PLIST
+
+
+def _windows_startup_path() -> Path:
+    appdata = os.environ.get("APPDATA", "")
+    if not appdata:
+        raise DeployError("未检测到 APPDATA，无法设置 Windows 开机自启")
+    return Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / AUTOSTART_WINDOWS_NAME
+
+
+def _build_webui_command_text(config: Dict[str, Any]) -> str:
+    command = list(build_webui_command(config))
+    return format_command(command)
+
+
+def enable_local_autostart(config: Dict[str, Any]) -> None:
+    os_name = detect_os()
+
+    if os_name == "windows":
+        startup_path = _windows_startup_path()
+        startup_path.parent.mkdir(parents=True, exist_ok=True)
+        content = """@echo off
+cd /d {root}
+if exist "{launcher}" (
+    call "{launcher}"
+) else (
+    if exist "{venv_python}" (
+        start "" /min "{venv_python}" webui.py
+    ) else (
+        start "" /min python webui.py
+    )
+)
+""".format(
+            root=str(ROOT_DIR),
+            launcher=str(ROOT_DIR / "start-local.bat"),
+            venv_python=str(ROOT_DIR / ".venv" / "Scripts" / "python.exe"),
+        )
+        startup_path.write_text(content, encoding="utf-8")
+        print(f"Windows 开机自启已开启：{startup_path}")
+        return
+
+    if os_name == "linux":
+        service_path = _linux_autostart_service_path()
+        service_path.parent.mkdir(parents=True, exist_ok=True)
+        command_text = _build_webui_command_text(config)
+        service_content = f"""[Unit]
+Description=Codex Keygen WebUI
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory={ROOT_DIR}
+ExecStart=/bin/bash -lc '{command_text}'
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+"""
+        service_path.write_text(service_content, encoding="utf-8")
+        run_command(["systemctl", "--user", "daemon-reload"], check=False)
+        run_command(["systemctl", "--user", "enable", AUTOSTART_LINUX_SERVICE], check=False)
+        run_command(["systemctl", "--user", "restart", AUTOSTART_LINUX_SERVICE], check=False)
+        print(f"Linux 开机自启已开启：{service_path}")
+        print("提示：若重启后用户服务不启动，请执行 `loginctl enable-linger $USER`")
+        return
+
+    if os_name == "macos":
+        plist_path = _macos_autostart_plist_path()
+        plist_path.parent.mkdir(parents=True, exist_ok=True)
+        command = list(build_webui_command(config))
+        args_xml = "\n".join([f"        <string>{item}</string>" for item in command])
+        plist_content = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">
+<plist version=\"1.0\">
+<dict>
+    <key>Label</key>
+    <string>com.codex.keygen.webui</string>
+    <key>ProgramArguments</key>
+    <array>
+{args_xml}
+    </array>
+    <key>WorkingDirectory</key>
+    <string>{ROOT_DIR}</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>{LOCAL_STDOUT_LOG}</string>
+    <key>StandardErrorPath</key>
+    <string>{LOCAL_STDERR_LOG}</string>
+</dict>
+</plist>
+"""
+        plist_path.write_text(plist_content, encoding="utf-8")
+        run_command(["launchctl", "unload", str(plist_path)], check=False)
+        run_command(["launchctl", "load", str(plist_path)], check=False)
+        print(f"macOS 开机自启已开启：{plist_path}")
+        return
+
+    raise DeployError(f"当前系统不支持开机自启设置：{os_name}")
+
+
+def disable_local_autostart() -> None:
+    os_name = detect_os()
+
+    if os_name == "windows":
+        startup_path = _windows_startup_path()
+        if remove_path_if_exists(startup_path):
+            print(f"Windows 开机自启已关闭：{startup_path}")
+        else:
+            print("Windows 开机自启未设置。")
+        return
+
+    if os_name == "linux":
+        service_path = _linux_autostart_service_path()
+        run_command(["systemctl", "--user", "disable", "--now", AUTOSTART_LINUX_SERVICE], check=False)
+        remove_path_if_exists(service_path)
+        print(f"Linux 开机自启已关闭：{service_path}")
+        return
+
+    if os_name == "macos":
+        plist_path = _macos_autostart_plist_path()
+        run_command(["launchctl", "unload", str(plist_path)], check=False)
+        remove_path_if_exists(plist_path)
+        print(f"macOS 开机自启已关闭：{plist_path}")
+        return
+
+    raise DeployError(f"当前系统不支持开机自启设置：{os_name}")
+
+
+def enable_docker_autostart() -> None:
+    compose_cmd = list(resolve_compose_with_env())
+    result = run_command_capture(compose_cmd + ["ps", "-q", "webui"], check=False)
+    container_id = str(result.stdout or "").strip()
+    if container_id:
+        run_command(["docker", "update", "--restart=unless-stopped", container_id], check=False)
+    print("Docker 开机自启已开启（restart=unless-stopped）。")
+
+
+def disable_docker_autostart() -> None:
+    compose_cmd = list(resolve_compose_with_env())
+    result = run_command_capture(compose_cmd + ["ps", "-q", "webui"], check=False)
+    container_id = str(result.stdout or "").strip()
+    if not container_id:
+        print("未检测到运行中的 Docker 容器，无法关闭重启策略。")
+        return
+    run_command(["docker", "update", "--restart=no", container_id], check=False)
+    print("Docker 开机自启已关闭（restart=no）。")
+
+
+def do_enable_autostart(mode: str, interactive: bool = True) -> None:
+    config = load_config()
+    selected_mode = resolve_mode_for_operations(mode, config, interactive=interactive)
+
+    if selected_mode == "docker":
+        enable_docker_autostart()
+    else:
+        sync_env_files(config)
+        create_local_launchers()
+        ensure_runtime_dirs()
+        enable_local_autostart(config)
+
+
+def do_disable_autostart(mode: str, interactive: bool = True) -> None:
+    config = load_config()
+    selected_mode = resolve_mode_for_operations(mode, config, interactive=interactive)
+
+    if selected_mode == "docker":
+        disable_docker_autostart()
+    else:
+        disable_local_autostart()
+
+
+def print_paths_info() -> None:
+    config = load_config()
+    print_section("文件目录信息")
+    print(f"项目根目录          : {ROOT_DIR}")
+    print(f"配置文件            : {RUNTIME_CONFIG_PATH} ({'存在' if RUNTIME_CONFIG_PATH.exists() else '不存在'})")
+    print(f"本地环境变量文件     : {DOTENV_PATH} ({'存在' if DOTENV_PATH.exists() else '不存在'})")
+    print(f"Docker 环境变量文件  : {DOCKER_ENV_PATH} ({'存在' if DOCKER_ENV_PATH.exists() else '不存在'})")
+    print(f"数据目录            : {DATA_DIR} ({'存在' if DATA_DIR.exists() else '不存在'})")
+    print(f"日志目录            : {LOGS_DIR} ({'存在' if LOGS_DIR.exists() else '不存在'})")
+    print(f"本地 PID 文件       : {LOCAL_PID_PATH} ({'存在' if LOCAL_PID_PATH.exists() else '不存在'})")
+    print(f"最近部署模式         : {config.get('last_deploy_mode') or '(未记录)'}")
 
 
 def do_deploy(
@@ -757,7 +1270,7 @@ def do_deploy(
         raise DeployError(f"部署失败，已回滚 .env/.env.docker。原始错误：{exc}") from exc
 
 
-def do_upgrade(mode: str) -> None:
+def do_upgrade(mode: str, interactive: bool = True) -> None:
     config = load_config()
     print_section("一键升级")
 
@@ -772,7 +1285,7 @@ def do_upgrade(mode: str) -> None:
 
     selected_mode = mode
     if selected_mode == "auto":
-        selected_mode = config.get("last_deploy_mode") or recommendation(config)[0]
+        selected_mode = choose_mode("auto", config, interactive=interactive)
 
     if selected_mode == "docker":
         compose_cmd = resolve_compose_command()
@@ -783,9 +1296,62 @@ def do_upgrade(mode: str) -> None:
         run_command(list(compose_cmd) + ["--env-file", str(DOCKER_ENV_PATH), "up", "-d", "--build"])
         print("Docker 模式升级完成。")
     else:
-        install_local_dependencies()
+        install_local_dependencies(interactive=interactive)
         sync_env_files(config)
         print("本地模式升级完成。请重启正在运行的 WebUI 进程。")
+
+
+def do_uninstall(mode: str, purge: bool = False, interactive: bool = True) -> None:
+    """按模式卸载部署产物。"""
+    config = load_config()
+    print_section("一键卸载")
+
+    selected_mode = mode
+    if selected_mode == "auto":
+        selected_mode = choose_mode("auto", config, interactive=interactive)
+
+    if selected_mode == "docker":
+        compose_cmd = resolve_compose_command()
+        if compose_cmd is None:
+            raise DeployError("卸载失败：未检测到 docker compose")
+
+        sync_env_files(config)
+        down_cmd = list(compose_cmd) + ["--env-file", str(DOCKER_ENV_PATH), "down", "--remove-orphans"]
+        if purge:
+            down_cmd.append("-v")
+        run_command(down_cmd, check=False)
+
+        if purge:
+            run_command(["docker", "image", "prune", "-f"], check=False)
+
+        print("Docker 模式卸载完成。")
+        print("- 已执行 compose down --remove-orphans")
+        if purge:
+            print("- 已额外清理 volumes 与悬空镜像")
+        return
+
+    # local 模式
+    print_section("本地卸载")
+    removed_any = False
+    for launcher_path in [ROOT_DIR / "start-local.sh", ROOT_DIR / "start-local.bat"]:
+        if remove_path_if_exists(launcher_path):
+            print(f"已删除启动脚本：{launcher_path.name}")
+            removed_any = True
+
+    if purge:
+        for extra_path in [ROOT_DIR / ".venv", DOTENV_PATH, DOCKER_ENV_PATH]:
+            if remove_path_if_exists(extra_path):
+                print(f"已清理：{extra_path.name}")
+                removed_any = True
+
+    if not removed_any:
+        print("未发现可清理的本地产物。")
+    else:
+        print("本地模式卸载完成。")
+
+    print("提示：默认不会删除 data/ 与 runtime-config.json。")
+    if purge:
+        print("提示：已执行 --purge，环境文件与虚拟环境已清理。")
 
 
 def print_config(config: Dict[str, Any]) -> None:
@@ -873,21 +1439,77 @@ def print_recommendation() -> None:
 def menu() -> None:
     while True:
         print("\n================ 部署管理菜单 ================")
-        print("1) 一键部署")
-        print("2) 一键升级")
-        print("3) 配置面板")
-        print("4) 智能推荐")
+        print("1) 安装/更新（同一命令）")
+        print("2) 更新（兼容入口）")
+        print("3) 卸载")
+        print("4) 查看配置")
+        print("5) 修改监听地址")
+        print("6) 修改端口")
+        print("7) 修改登录账号")
+        print("8) 修改登录密码")
+        print("9) 启动服务")
+        print("10) 停止服务")
+        print("11) 重启服务")
+        print("12) 查看服务状态")
+        print("13) 设置开机自启")
+        print("14) 关闭开机自启")
+        print("15) 文件目录信息")
+        print("16) 智能推荐")
+        print("17) 进入高级配置面板")
         print("0) 退出")
         choice = input("请选择：").strip()
 
         if choice == "1":
             do_deploy(mode="auto", interactive=True, auto_yes_install_docker=False)
         elif choice == "2":
-            do_upgrade(mode="auto")
+            do_upgrade(mode="auto", interactive=True)
         elif choice == "3":
-            config_panel()
+            purge = ask_yes_no("是否执行深度清理（--purge）？", default_yes=False)
+            do_uninstall(mode="auto", purge=purge, interactive=True)
         elif choice == "4":
+            print_config(load_config())
+        elif choice == "5":
+            config = load_config()
+            config["host"] = ask_text("监听地址", str(config.get("host", DEFAULT_CONFIG["host"])))
+            save_config(config)
+            sync_env_files(config)
+            print("监听地址已更新。")
+        elif choice == "6":
+            config = load_config()
+            config["port"] = ask_int("端口", int(config.get("port", DEFAULT_CONFIG["port"])))
+            save_config(config)
+            sync_env_files(config)
+            print("端口已更新。")
+        elif choice == "7":
+            config = load_config()
+            config["access_username"] = ask_text("登录账号", str(config.get("access_username", DEFAULT_CONFIG["access_username"])))
+            save_config(config)
+            sync_env_files(config)
+            print("登录账号已更新。")
+        elif choice == "8":
+            config = load_config()
+            config["access_password"] = ask_password("登录密码", str(config.get("access_password", DEFAULT_CONFIG["access_password"])))
+            save_config(config)
+            sync_env_files(config)
+            print("登录密码已更新。")
+        elif choice == "9":
+            do_start(mode="auto", interactive=True)
+        elif choice == "10":
+            do_stop(mode="auto", interactive=True)
+        elif choice == "11":
+            do_restart(mode="auto", interactive=True)
+        elif choice == "12":
+            do_status(mode="auto", interactive=False)
+        elif choice == "13":
+            do_enable_autostart(mode="auto", interactive=True)
+        elif choice == "14":
+            do_disable_autostart(mode="auto", interactive=True)
+        elif choice == "15":
+            print_paths_info()
+        elif choice == "16":
             print_recommendation()
+        elif choice == "17":
+            config_panel()
         elif choice == "0":
             print("已退出部署管理。")
             break
@@ -910,6 +1532,38 @@ def build_parser() -> argparse.ArgumentParser:
 
     upgrade_parser = subparsers.add_parser("upgrade", help="一键升级")
     upgrade_parser.add_argument("--mode", choices=["auto", "docker", "local"], default="auto", help="升级模式")
+    upgrade_parser.add_argument("--non-interactive", action="store_true", help="非交互模式")
+
+    uninstall_parser = subparsers.add_parser("uninstall", help="一键卸载")
+    uninstall_parser.add_argument("--mode", choices=["auto", "docker", "local"], default="auto", help="卸载模式")
+    uninstall_parser.add_argument("--purge", action="store_true", help="深度清理（删除 .venv/.env/.env.docker；Docker 模式清理卷）")
+    uninstall_parser.add_argument("--non-interactive", action="store_true", help="非交互模式")
+
+    start_parser = subparsers.add_parser("start", help="启动服务")
+    start_parser.add_argument("--mode", choices=["auto", "docker", "local"], default="auto", help="服务模式")
+    start_parser.add_argument("--non-interactive", action="store_true", help="非交互模式")
+
+    stop_parser = subparsers.add_parser("stop", help="停止服务")
+    stop_parser.add_argument("--mode", choices=["auto", "docker", "local"], default="auto", help="服务模式")
+    stop_parser.add_argument("--non-interactive", action="store_true", help="非交互模式")
+
+    restart_parser = subparsers.add_parser("restart", help="重启服务")
+    restart_parser.add_argument("--mode", choices=["auto", "docker", "local"], default="auto", help="服务模式")
+    restart_parser.add_argument("--non-interactive", action="store_true", help="非交互模式")
+
+    status_parser = subparsers.add_parser("status", help="查看服务状态")
+    status_parser.add_argument("--mode", choices=["auto", "docker", "local"], default="auto", help="服务模式")
+    status_parser.add_argument("--non-interactive", action="store_true", help="非交互模式")
+
+    autostart_on_parser = subparsers.add_parser("autostart-on", help="开启开机自启")
+    autostart_on_parser.add_argument("--mode", choices=["auto", "docker", "local"], default="auto", help="服务模式")
+    autostart_on_parser.add_argument("--non-interactive", action="store_true", help="非交互模式")
+
+    autostart_off_parser = subparsers.add_parser("autostart-off", help="关闭开机自启")
+    autostart_off_parser.add_argument("--mode", choices=["auto", "docker", "local"], default="auto", help="服务模式")
+    autostart_off_parser.add_argument("--non-interactive", action="store_true", help="非交互模式")
+
+    subparsers.add_parser("info", help="显示文件目录信息")
 
     subparsers.add_parser("config", help="打开配置面板")
     subparsers.add_parser("recommend", help="查看智能推荐")
@@ -935,7 +1589,39 @@ def main() -> None:
             return
 
         if args.command == "upgrade":
-            do_upgrade(mode=args.mode)
+            do_upgrade(mode=args.mode, interactive=not args.non_interactive)
+            return
+
+        if args.command == "uninstall":
+            do_uninstall(mode=args.mode, purge=args.purge, interactive=not args.non_interactive)
+            return
+
+        if args.command == "start":
+            do_start(mode=args.mode, interactive=not args.non_interactive)
+            return
+
+        if args.command == "stop":
+            do_stop(mode=args.mode, interactive=not args.non_interactive)
+            return
+
+        if args.command == "restart":
+            do_restart(mode=args.mode, interactive=not args.non_interactive)
+            return
+
+        if args.command == "status":
+            do_status(mode=args.mode, interactive=not args.non_interactive)
+            return
+
+        if args.command == "autostart-on":
+            do_enable_autostart(mode=args.mode, interactive=not args.non_interactive)
+            return
+
+        if args.command == "autostart-off":
+            do_disable_autostart(mode=args.mode, interactive=not args.non_interactive)
+            return
+
+        if args.command == "info":
+            print_paths_info()
             return
 
         if args.command == "config":

@@ -3,11 +3,15 @@
 统一命令入口：keygen
 
 目标：
-- 安装：keygen install
-- 升级：keygen upgrade
+- 安装/升级（同一命令）：keygen install
+- 升级兼容别名：keygen upgrade
+- 卸载：keygen uninstall
+- 服务控制：keygen start/stop/restart/status
+- 开机自启：keygen autostart-on/autostart-off
+- 信息查看：keygen info
 - 打包：keygen package
 - 配置面板：keygen config
-- 直接输入 keygen 默认打开配置面板
+- 直接输入 keygen 默认打开管理面板
 """
 
 from __future__ import annotations
@@ -43,7 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command")
 
-    install_parser = subparsers.add_parser("install", help="一键安装（按系统自动选择流程）")
+    install_parser = subparsers.add_parser("install", help="一键安装/升级（按系统自动选择流程）")
     install_parser.add_argument("--mode", choices=["auto", "docker", "local"], default="auto", help="安装模式")
     install_parser.add_argument("--non-interactive", action="store_true", help="非交互安装，使用现有配置")
     install_parser.add_argument(
@@ -52,8 +56,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="Linux 缺少 Docker 时自动同意安装",
     )
 
-    upgrade_parser = subparsers.add_parser("upgrade", help="一键升级")
+    upgrade_parser = subparsers.add_parser("upgrade", help="兼容命令（等价 install）")
     upgrade_parser.add_argument("--mode", choices=["auto", "docker", "local"], default="auto", help="升级模式")
+    upgrade_parser.add_argument("--non-interactive", action="store_true", help="非交互模式")
+
+    uninstall_parser = subparsers.add_parser("uninstall", help="一键卸载")
+    uninstall_parser.add_argument("--mode", choices=["auto", "docker", "local"], default="auto", help="卸载模式")
+    uninstall_parser.add_argument("--purge", action="store_true", help="深度清理（删除本地环境文件/虚拟环境；Docker 清理卷）")
+    uninstall_parser.add_argument("--non-interactive", action="store_true", help="非交互模式")
+
+    start_parser = subparsers.add_parser("start", help="启动服务")
+    start_parser.add_argument("--mode", choices=["auto", "docker", "local"], default="auto", help="服务模式")
+    start_parser.add_argument("--non-interactive", action="store_true", help="非交互模式")
+
+    stop_parser = subparsers.add_parser("stop", help="停止服务")
+    stop_parser.add_argument("--mode", choices=["auto", "docker", "local"], default="auto", help="服务模式")
+    stop_parser.add_argument("--non-interactive", action="store_true", help="非交互模式")
+
+    restart_parser = subparsers.add_parser("restart", help="重启服务")
+    restart_parser.add_argument("--mode", choices=["auto", "docker", "local"], default="auto", help="服务模式")
+    restart_parser.add_argument("--non-interactive", action="store_true", help="非交互模式")
+
+    status_parser = subparsers.add_parser("status", help="查看服务状态")
+    status_parser.add_argument("--mode", choices=["auto", "docker", "local"], default="auto", help="服务模式")
+    status_parser.add_argument("--non-interactive", action="store_true", help="非交互模式")
+
+    autostart_on_parser = subparsers.add_parser("autostart-on", help="开启开机自启")
+    autostart_on_parser.add_argument("--mode", choices=["auto", "docker", "local"], default="auto", help="服务模式")
+    autostart_on_parser.add_argument("--non-interactive", action="store_true", help="非交互模式")
+
+    autostart_off_parser = subparsers.add_parser("autostart-off", help="关闭开机自启")
+    autostart_off_parser.add_argument("--mode", choices=["auto", "docker", "local"], default="auto", help="服务模式")
+    autostart_off_parser.add_argument("--non-interactive", action="store_true", help="非交互模式")
+
+    subparsers.add_parser("info", help="显示文件目录信息")
 
     package_parser = subparsers.add_parser("package", help="一键打包（auto 仅支持 Windows/macOS）")
     package_parser.add_argument(
@@ -82,7 +118,53 @@ def run_install(args: argparse.Namespace) -> int:
 
 
 def run_upgrade(args: argparse.Namespace) -> int:
-    deploy_manager.do_upgrade(mode=args.mode)
+    print("[提示] upgrade 为兼容命令，建议统一使用 install。")
+    deploy_manager.do_deploy(
+        mode=args.mode,
+        interactive=not args.non_interactive,
+        auto_yes_install_docker=False,
+        config_override=None,
+    )
+    return 0
+
+
+def run_uninstall(args: argparse.Namespace) -> int:
+    deploy_manager.do_uninstall(mode=args.mode, purge=bool(args.purge), interactive=not args.non_interactive)
+    return 0
+
+
+def run_start(args: argparse.Namespace) -> int:
+    deploy_manager.do_start(mode=args.mode, interactive=not args.non_interactive)
+    return 0
+
+
+def run_stop(args: argparse.Namespace) -> int:
+    deploy_manager.do_stop(mode=args.mode, interactive=not args.non_interactive)
+    return 0
+
+
+def run_restart(args: argparse.Namespace) -> int:
+    deploy_manager.do_restart(mode=args.mode, interactive=not args.non_interactive)
+    return 0
+
+
+def run_status(args: argparse.Namespace) -> int:
+    deploy_manager.do_status(mode=args.mode, interactive=not args.non_interactive)
+    return 0
+
+
+def run_autostart_on(args: argparse.Namespace) -> int:
+    deploy_manager.do_enable_autostart(mode=args.mode, interactive=not args.non_interactive)
+    return 0
+
+
+def run_autostart_off(args: argparse.Namespace) -> int:
+    deploy_manager.do_disable_autostart(mode=args.mode, interactive=not args.non_interactive)
+    return 0
+
+
+def run_info() -> int:
+    deploy_manager.print_paths_info()
     return 0
 
 
@@ -110,14 +192,30 @@ def run_menu() -> int:
 def dispatch(args: argparse.Namespace) -> int:
     command = args.command
 
-    # 默认行为：直接 keygen 打开配置面板
+    # 默认行为：直接 keygen 打开管理面板
     if command is None:
-        return run_config()
+        return run_menu()
 
     if command == "install":
         return run_install(args)
     if command == "upgrade":
         return run_upgrade(args)
+    if command == "uninstall":
+        return run_uninstall(args)
+    if command == "start":
+        return run_start(args)
+    if command == "stop":
+        return run_stop(args)
+    if command == "restart":
+        return run_restart(args)
+    if command == "status":
+        return run_status(args)
+    if command == "autostart-on":
+        return run_autostart_on(args)
+    if command == "autostart-off":
+        return run_autostart_off(args)
+    if command == "info":
+        return run_info()
     if command == "package":
         return run_package(args)
     if command == "config":
