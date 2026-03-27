@@ -88,6 +88,7 @@ def build_tempmail_config(
         "sender_keyword",
         "subject_keyword",
         "alias_separator",
+        "alias_charset",
         "api_key",
         "auth_style",
         "auth_placement",

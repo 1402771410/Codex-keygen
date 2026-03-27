@@ -244,6 +244,22 @@
 
                         <div class="form-row">
                             <div class="form-group">
+                                <label for="rule-alias-charset">随机后缀字符集</label>
+                                <select id="rule-alias-charset">
+                                    <option value="loweralnum">小写字母 + 数字（推荐）</option>
+                                    <option value="digits">仅数字</option>
+                                    <option value="lower">仅小写字母</option>
+                                    <option value="mixedalnum">大小写字母 + 数字</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="rule-subject-keyword">主题关键词（可选）</label>
+                                <input type="text" id="rule-subject-keyword" placeholder="例如：verification code">
+                            </div>
+                        </div>
+
+                        <div class="form-row">
+                            <div class="form-group">
                                 <label for="rule-pop3-host">POP3 服务器</label>
                                 <input type="text" id="rule-pop3-host" placeholder="例如：pop.225.com">
                             </div>
@@ -270,8 +286,8 @@
                                 <input type="number" id="rule-pop3-poll-interval" min="2" max="60" value="5">
                             </div>
                             <div class="form-group">
-                                <label for="rule-subject-keyword">主题关键词（可选）</label>
-                                <input type="text" id="rule-subject-keyword" placeholder="例如：verification code">
+                                <label for="rule-sender-keyword">发件人关键词（可选）</label>
+                                <input type="text" id="rule-sender-keyword" placeholder="例如：openai.com">
                             </div>
                         </div>
 

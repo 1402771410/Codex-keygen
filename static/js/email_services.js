@@ -25,6 +25,7 @@ const elements = {
     rulePop3Config: document.getElementById('rule-pop3-config'),
     ruleBaseEmail: document.getElementById('rule-base-email'),
     ruleAliasLength: document.getElementById('rule-alias-length'),
+    ruleAliasCharset: document.getElementById('rule-alias-charset'),
     rulePop3Host: document.getElementById('rule-pop3-host'),
     rulePop3Port: document.getElementById('rule-pop3-port'),
     rulePop3Username: document.getElementById('rule-pop3-username'),
@@ -32,6 +33,7 @@ const elements = {
     rulePop3UseSsl: document.getElementById('rule-pop3-use-ssl'),
     rulePop3PollInterval: document.getElementById('rule-pop3-poll-interval'),
     ruleSubjectKeyword: document.getElementById('rule-subject-keyword'),
+    ruleSenderKeyword: document.getElementById('rule-sender-keyword'),
     ruleTimeout: document.getElementById('rule-timeout'),
     ruleMaxRetries: document.getElementById('rule-max-retries'),
     ruleEnabled: document.getElementById('rule-enabled'),
@@ -469,6 +471,16 @@ function renderTempmailRulesTable() {
             if (config.alias_length) {
                 summaryParts.push(`别名长度: ${Number(config.alias_length)}`);
             }
+            if (config.alias_charset) {
+                const charsetTextMap = {
+                    digits: '仅数字',
+                    lower: '仅小写字母',
+                    loweralnum: '小写+数字',
+                    mixedalnum: '大小写+数字',
+                };
+                const charsetLabel = charsetTextMap[String(config.alias_charset)] || String(config.alias_charset);
+                summaryParts.push(`字符集: ${escapeHtml(charsetLabel)}`);
+            }
             summaryParts.push(`SSL: ${config.use_ssl === false ? '关闭' : '开启'}`);
         }
         summaryParts.push(`超时: ${Number(config.timeout || 30)}s`);
@@ -554,6 +566,9 @@ function openRuleModal(rule = null) {
     if (elements.ruleAliasLength) {
         elements.ruleAliasLength.value = String(config.alias_length || 8);
     }
+    if (elements.ruleAliasCharset) {
+        elements.ruleAliasCharset.value = config.alias_charset || 'loweralnum';
+    }
     if (elements.rulePop3Host) {
         elements.rulePop3Host.value = config.pop3_host || '';
     }
@@ -577,6 +592,9 @@ function openRuleModal(rule = null) {
     }
     if (elements.ruleSubjectKeyword) {
         elements.ruleSubjectKeyword.value = config.subject_keyword || '';
+    }
+    if (elements.ruleSenderKeyword) {
+        elements.ruleSenderKeyword.value = config.sender_keyword || '';
     }
     elements.ruleTimeout.value = String(config.timeout || 30);
     elements.ruleMaxRetries.value = String(config.max_retries || 3);
@@ -652,9 +670,11 @@ async function handleSaveRule(event) {
         const pop3Username = (elements.rulePop3Username?.value || '').trim();
         const pop3Password = elements.rulePop3Password?.value || '';
         const aliasLength = Number(elements.ruleAliasLength?.value || 8);
+        const aliasCharset = (elements.ruleAliasCharset?.value || 'loweralnum').trim();
         const pollInterval = Number(elements.rulePop3PollInterval?.value || 5);
         const useSsl = Boolean(elements.rulePop3UseSsl?.checked);
         const subjectKeyword = (elements.ruleSubjectKeyword?.value || '').trim();
+        const senderKeyword = (elements.ruleSenderKeyword?.value || '').trim();
 
         if (!baseEmail || !pop3Host || !pop3Username || !pop3Password) {
             toast.error('POP3 无限邮箱配置不完整，请填写主邮箱、服务器、用户名和密码');
@@ -672,9 +692,13 @@ async function handleSaveRule(event) {
         config.pop3_password = pop3Password;
         config.use_ssl = useSsl;
         config.alias_length = Number.isInteger(aliasLength) ? Math.max(4, aliasLength) : 8;
+        config.alias_charset = aliasCharset || 'loweralnum';
         config.poll_interval = Number.isInteger(pollInterval) ? Math.max(2, pollInterval) : 5;
         if (subjectKeyword) {
             config.subject_keyword = subjectKeyword;
+        }
+        if (senderKeyword) {
+            config.sender_keyword = senderKeyword;
         }
         config.base_url = '';
     }

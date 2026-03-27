@@ -237,6 +237,18 @@ async def get_service_types():
                     {"name": "pop3_password", "label": "POP3 密码/授权码", "required": False, "placeholder": "必填"},
                     {"name": "use_ssl", "label": "POP3 使用 SSL", "required": False, "default": True},
                     {"name": "alias_length", "label": "随机后缀长度", "required": False, "default": 8},
+                    {
+                        "name": "alias_charset",
+                        "label": "随机后缀字符集",
+                        "required": False,
+                        "default": "loweralnum",
+                        "options": [
+                            {"value": "loweralnum", "label": "小写字母 + 数字"},
+                            {"value": "digits", "label": "仅数字"},
+                            {"value": "lower", "label": "仅小写字母"},
+                            {"value": "mixedalnum", "label": "大小写字母 + 数字"},
+                        ],
+                    },
                     {"name": "poll_interval", "label": "轮询间隔（秒）", "required": False, "default": 5},
                     {"name": "sender_keyword", "label": "发件人关键词", "required": False, "placeholder": "可选"},
                     {"name": "subject_keyword", "label": "主题关键词", "required": False, "placeholder": "可选"},

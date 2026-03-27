@@ -455,7 +455,8 @@ class TempmailService(BaseEmailService):
 
         alias_separator = str(runtime_config.get("alias_separator") or "+").strip() or "+"
         alias_length = max(4, int(runtime_config.get("alias_length") or 8))
-        alias_suffix = self._generate_local_part(prefix="", random_length=alias_length)
+        alias_charset = str(runtime_config.get("alias_charset") or "loweralnum").strip().lower()
+        alias_suffix = self._generate_alias_suffix(alias_length, alias_charset)
         alias_email = f"{local_part}{alias_separator}{alias_suffix}@{domain}"
 
         logger.info("创建 POP3 Alias 邮箱成功: %s", alias_email)
@@ -465,6 +466,7 @@ class TempmailService(BaseEmailService):
             "provider": "pop3_alias",
             "base_email": base_email,
             "alias_suffix": alias_suffix,
+            "alias_charset": alias_charset,
             "created_at": time.time(),
         }
 
@@ -1102,6 +1104,18 @@ class TempmailService(BaseEmailService):
     def _generate_secret(length: int) -> str:
         alphabet = string.ascii_letters + string.digits
         return "".join(secrets.choice(alphabet) for _ in range(length))
+
+    @staticmethod
+    def _generate_alias_suffix(length: int, charset: str) -> str:
+        normalized = str(charset or "").strip().lower()
+        alphabet_map = {
+            "digits": string.digits,
+            "lower": string.ascii_lowercase,
+            "loweralnum": string.ascii_lowercase + string.digits,
+            "mixedalnum": string.ascii_letters + string.digits,
+        }
+        alphabet = alphabet_map.get(normalized) or alphabet_map["loweralnum"]
+        return "".join(secrets.choice(alphabet) for _ in range(max(1, int(length))))
 
     @staticmethod
     def _generate_local_part(prefix: str = "", random_length: int = 10) -> str:
