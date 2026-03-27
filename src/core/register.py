@@ -108,6 +108,8 @@ class RegistrationEngine:
     负责协调邮箱服务、OAuth 流程和 OpenAI API 调用
     """
 
+    OTP_RETRY_MAX_ATTEMPTS = 3
+
     def __init__(
         self,
         email_service: BaseEmailService,
@@ -625,6 +627,10 @@ class RegistrationEngine:
             email_service_config = getattr(self.email_service, "config", None)
             if isinstance(email_service_config, dict):
                 email_service_config["otp_purpose"] = effective_purpose
+                sender_keyword = str(email_service_config.get("sender_keyword") or "").strip()
+                if effective_purpose == "login" and sender_keyword:
+                    self._log("登录场景下已忽略固定发件人过滤，避免因发件人变化导致漏码", "warning")
+                    email_service_config["sender_keyword"] = ""
 
             email_id = self.email_info.get("service_id") if self.email_info else None
             code = self.email_service.get_verification_code(
@@ -645,6 +651,53 @@ class RegistrationEngine:
         except Exception as e:
             self._log(f"获取验证码失败: {e}", "error")
             return None
+
+    def _wait_verification_code_with_retry(
+        self,
+        *,
+        otp_purpose: str,
+        stage_label: str,
+        resend_callback: Optional[Callable[[], bool]] = None,
+        max_attempts: Optional[int] = None,
+        send_before_first_attempt: bool = False,
+    ) -> Optional[str]:
+        """等待验证码，超时后按上限重发。"""
+        total_attempts = int(max_attempts or self.OTP_RETRY_MAX_ATTEMPTS or 3)
+        if total_attempts < 1:
+            total_attempts = 1
+
+        for attempt in range(1, total_attempts + 1):
+            should_send = send_before_first_attempt or attempt > 1
+            if should_send:
+                if not resend_callback:
+                    self._log(f"{stage_label} 未配置验证码发送函数，无法重试", "error")
+                    return None
+
+                self._log(f"{stage_label} 发送验证码（第 {attempt}/{total_attempts} 次）...")
+                send_ok = bool(resend_callback())
+                self._log(
+                    f"{stage_label} 发送状态（第 {attempt}/{total_attempts} 次）: {'成功' if send_ok else '失败'}"
+                )
+                if not send_ok:
+                    if attempt < total_attempts:
+                        self._log(
+                            f"{stage_label} 本次发送失败，准备第 {attempt + 1}/{total_attempts} 次重试",
+                            "warning",
+                        )
+                    continue
+
+            code = self._get_verification_code(otp_purpose=otp_purpose)
+            if code:
+                return code
+
+            if attempt < total_attempts:
+                self._log(
+                    f"{stage_label} 等待验证码超时，准备重发（第 {attempt + 1}/{total_attempts} 次）",
+                    "warning",
+                )
+
+        self._log(f"{stage_label} 重试 {total_attempts} 次后仍未获取到验证码", "error")
+        return None
 
     def _validate_verification_code(self, code: str) -> bool:
         """验证验证码"""
@@ -802,15 +855,17 @@ class RegistrationEngine:
 
         if self._is_login_password_page_type(signup_result.page_type):
             self._log("降级登录: 进入 login_password 流程，直接触发无密 OTP")
-            if not self._send_passwordless_login_otp():
-                self._log("降级登录失败：无密 OTP 触发失败", "error")
-                return None
+            fallback_resend_callback: Callable[[], bool] = self._send_passwordless_login_otp
+            fallback_send_before_first = True
         elif self._is_otp_page_type(signup_result.page_type) or signup_result.is_existing_account:
             self._log(
                 f"降级登录: 页面类型 {signup_result.page_type or 'unknown'}，按 OTP 验证流程继续",
                 "warning",
             )
             self._otp_sent_at = time.time()
+            self._log("13.1 降级登录 OTP 发送状态: 已由页面自动触发")
+            fallback_resend_callback = self._send_passwordless_login_otp
+            fallback_send_before_first = False
         else:
             self._log(
                 f"降级登录失败：不支持的页面类型 {signup_result.page_type or 'unknown'}",
@@ -819,9 +874,15 @@ class RegistrationEngine:
             return None
 
         self._log("降级登录: 等待验证码...")
-        code = self._get_verification_code(otp_purpose="login")
+        code = self._wait_verification_code_with_retry(
+            otp_purpose="login",
+            stage_label="13.1 降级登录 OTP",
+            resend_callback=fallback_resend_callback,
+            max_attempts=self.OTP_RETRY_MAX_ATTEMPTS,
+            send_before_first_attempt=fallback_send_before_first,
+        )
         if not code:
-            self._log("降级登录失败：获取验证码失败", "error")
+            self._log("降级登录失败：获取验证码失败（已达到重试上限）", "error")
             return None
 
         self._log("降级登录: 验证验证码...")
@@ -1111,12 +1172,20 @@ class RegistrationEngine:
 
             stage = "wait_otp"
             self._log("探测 10/10: 等待验证码...")
-            code = self._get_verification_code(otp_purpose="login" if self._is_existing_account else "create")
+            otp_purpose = "login" if self._is_existing_account else "create"
+            resend_callback = self._send_passwordless_login_otp if self._is_existing_account else self._send_verification_code
+            code = self._wait_verification_code_with_retry(
+                otp_purpose=otp_purpose,
+                stage_label="探测 10/10 验证码",
+                resend_callback=resend_callback,
+                max_attempts=self.OTP_RETRY_MAX_ATTEMPTS,
+                send_before_first_attempt=False,
+            )
             if not code:
                 return OTPProbeResult(
                     success=False,
                     stage=stage,
-                    message="获取验证码失败",
+                    message=f"获取验证码失败（已重试 {self.OTP_RETRY_MAX_ATTEMPTS} 次）",
                     email=self.email or "",
                     is_existing_account=self._is_existing_account,
                 )
@@ -1234,9 +1303,17 @@ class RegistrationEngine:
 
             # 10. 获取验证码
             self._log("10. 等待验证码...")
-            code = self._get_verification_code(otp_purpose="login" if self._is_existing_account else "create")
+            otp_purpose = "login" if self._is_existing_account else "create"
+            resend_callback = self._send_passwordless_login_otp if self._is_existing_account else self._send_verification_code
+            code = self._wait_verification_code_with_retry(
+                otp_purpose=otp_purpose,
+                stage_label="10. 验证码",
+                resend_callback=resend_callback,
+                max_attempts=self.OTP_RETRY_MAX_ATTEMPTS,
+                send_before_first_attempt=False,
+            )
             if not code:
-                result.error_message = "获取验证码失败"
+                result.error_message = f"获取验证码失败（已重试 {self.OTP_RETRY_MAX_ATTEMPTS} 次）"
                 return result
 
             # 11. 验证验证码
