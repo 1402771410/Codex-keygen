@@ -230,6 +230,16 @@ async def get_service_types():
                     {"name": "api_key", "label": "API Key（如供应商需要）", "required": False, "placeholder": "可选"},
                     {"name": "timeout", "label": "超时时间（秒）", "required": False, "default": 30},
                     {"name": "max_retries", "label": "最大重试次数", "required": False, "default": 3},
+                    {"name": "base_email", "label": "主邮箱地址（POP3 Alias）", "required": False, "placeholder": "例如：123456@225.com"},
+                    {"name": "pop3_host", "label": "POP3 服务器", "required": False, "placeholder": "例如：pop.225.com"},
+                    {"name": "pop3_port", "label": "POP3 端口", "required": False, "default": 995},
+                    {"name": "pop3_username", "label": "POP3 用户名", "required": False, "placeholder": "通常为邮箱账号"},
+                    {"name": "pop3_password", "label": "POP3 密码/授权码", "required": False, "placeholder": "必填"},
+                    {"name": "use_ssl", "label": "POP3 使用 SSL", "required": False, "default": True},
+                    {"name": "alias_length", "label": "随机后缀长度", "required": False, "default": 8},
+                    {"name": "poll_interval", "label": "轮询间隔（秒）", "required": False, "default": 5},
+                    {"name": "sender_keyword", "label": "发件人关键词", "required": False, "placeholder": "可选"},
+                    {"name": "subject_keyword", "label": "主题关键词", "required": False, "placeholder": "可选"},
                 ],
             }
         ]

@@ -12,6 +12,7 @@ from ..config.constants import (
 
 TEMPMAIL_PUBLIC_PROVIDER_OPTIONS = (
     "tempmail_lol",
+    "pop3_alias",
 )
 
 
@@ -80,6 +81,13 @@ def build_tempmail_config(
         "address_prefix",
         "preferred_domain",
         "fallback_domain",
+        "base_email",
+        "pop3_host",
+        "pop3_username",
+        "pop3_password",
+        "sender_keyword",
+        "subject_keyword",
+        "alias_separator",
         "api_key",
         "auth_style",
         "auth_placement",
@@ -99,6 +107,28 @@ def build_tempmail_config(
         value = str(source.get(key) or "").strip()
         if value:
             config[key] = value
+
+    optional_int_fields = (
+        "pop3_port",
+        "alias_length",
+        "poll_interval",
+        "max_messages",
+    )
+    for key in optional_int_fields:
+        raw_value = source.get(key)
+        if raw_value is None or raw_value == "":
+            continue
+        try:
+            config[key] = int(raw_value)
+        except (TypeError, ValueError):
+            continue
+
+    use_ssl_value = source.get("use_ssl")
+    if use_ssl_value is not None:
+        if isinstance(use_ssl_value, bool):
+            config["use_ssl"] = use_ssl_value
+        else:
+            config["use_ssl"] = str(use_ssl_value).strip().lower() in {"1", "true", "yes", "on"}
 
     return config
 

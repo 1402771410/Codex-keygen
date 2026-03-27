@@ -112,6 +112,9 @@ TEMPMAIL_PROVIDER_ALIASES = {
     "onesecmail": "onesecmail",
     "guerrilla": "guerrillamail",
     "guerrillamail": "guerrillamail",
+    "pop3_alias": "pop3_alias",
+    "pop3-plus": "pop3_alias",
+    "plus_alias": "pop3_alias",
 }
 
 TEMPMAIL_PROVIDER_CATALOG: Dict[str, Dict[str, Any]] = {
@@ -144,6 +147,12 @@ TEMPMAIL_PROVIDER_CATALOG: Dict[str, Dict[str, Any]] = {
         "description": "Session + Query 接口（f=get_email_address/get_email_list/fetch_email）",
         "call_style": "session_query",
         "default_base_url": "https://api.guerrillamail.com/ajax.php",
+    },
+    "pop3_alias": {
+        "label": "普通邮箱 POP3+Alias",
+        "description": "主邮箱 + 随机别名（local+random@domain），通过 POP3 收取验证码",
+        "call_style": "pop3_alias",
+        "default_base_url": "",
     },
 }
 

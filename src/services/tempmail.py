@@ -8,6 +8,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Set
 
 from .base import BaseEmailService, EmailServiceError, EmailServiceType
+from .pop3_email import Pop3EmailService
 from .tempmail_catalog import get_tempmail_provider_meta, normalize_tempmail_provider
 from ..config.constants import OTP_CODE_PATTERN
 from ..core.http_client import HTTPClient, RequestConfig
@@ -64,6 +65,8 @@ class TempmailService(BaseEmailService):
                 email_info = self._create_email_onesecmail(runtime_config)
             elif provider == "guerrillamail":
                 email_info = self._create_email_guerrillamail(runtime_config)
+            elif provider == "pop3_alias":
+                email_info = self._create_email_pop3_alias(runtime_config)
             else:
                 raise EmailServiceError(f"不支持的临时邮箱供应商: {provider}")
 
@@ -114,6 +117,9 @@ class TempmailService(BaseEmailService):
                 logger.warning("GuerrillaMail 缺少 sid_token，无法获取验证码")
                 return None
             return self._poll_guerrillamail(email, sid_token, timeout, pattern, runtime_config)
+
+        if provider == "pop3_alias":
+            return self._poll_pop3_alias(email, timeout, pattern, otp_sent_at, runtime_config)
 
         logger.warning("未知供应商 %s，无法获取验证码", provider)
         return None
@@ -178,6 +184,11 @@ class TempmailService(BaseEmailService):
                         timeout=10,
                     ),
                 )
+            elif provider == "pop3_alias":
+                pop3_service = self._build_pop3_service(runtime_config)
+                if not pop3_service.check_health():
+                    self.update_status(False, EmailServiceError("POP3 连通性检查失败"))
+                    return False
             else:
                 self.update_status(False, EmailServiceError(f"未知供应商: {provider}"))
                 return False
@@ -428,6 +439,32 @@ class TempmailService(BaseEmailService):
             "service_id": sid_token,
             "token": sid_token,
             "provider": "guerrillamail",
+            "created_at": time.time(),
+        }
+
+    def _create_email_pop3_alias(self, runtime_config: Dict[str, Any]) -> Dict[str, Any]:
+        base_email = str(runtime_config.get("base_email") or "").strip()
+        if "@" not in base_email:
+            raise EmailServiceError("POP3 无限邮箱需要配置主邮箱地址（base_email）")
+
+        local_part, domain = base_email.split("@", 1)
+        local_part = local_part.strip()
+        domain = domain.strip()
+        if not local_part or not domain:
+            raise EmailServiceError("主邮箱地址格式无效")
+
+        alias_separator = str(runtime_config.get("alias_separator") or "+").strip() or "+"
+        alias_length = max(4, int(runtime_config.get("alias_length") or 8))
+        alias_suffix = self._generate_local_part(prefix="", random_length=alias_length)
+        alias_email = f"{local_part}{alias_separator}{alias_suffix}@{domain}"
+
+        logger.info("创建 POP3 Alias 邮箱成功: %s", alias_email)
+        return {
+            "email": alias_email,
+            "service_id": alias_email,
+            "provider": "pop3_alias",
+            "base_email": base_email,
+            "alias_suffix": alias_suffix,
             "created_at": time.time(),
         }
 
@@ -698,6 +735,25 @@ class TempmailService(BaseEmailService):
 
         return None
 
+    def _poll_pop3_alias(
+        self,
+        email: str,
+        timeout: int,
+        pattern: str,
+        otp_sent_at: Optional[float],
+        runtime_config: Dict[str, Any],
+    ) -> Optional[str]:
+        pop3_service = self._build_pop3_service(runtime_config)
+        code = pop3_service.get_verification_code(
+            email=email,
+            timeout=timeout,
+            pattern=pattern,
+            otp_sent_at=otp_sent_at,
+        )
+        if code:
+            self.update_status(True)
+        return code
+
     def _resolve_mail_tm_domain(self, runtime_config: Dict[str, Any], preferred_domain: str) -> str:
         domains_url = self._resolve_endpoint_url(runtime_config, "domains_path", "/domains")
         response = self.http_client.get(
@@ -781,6 +837,36 @@ class TempmailService(BaseEmailService):
         runtime_config["base_url"] = base_url.rstrip("/")
 
         return runtime_config
+
+    @staticmethod
+    def _to_bool(value: Any, default: bool = True) -> bool:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return default
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "y", "on"}:
+            return True
+        if text in {"0", "false", "no", "n", "off"}:
+            return False
+        return default
+
+    def _build_pop3_service(self, runtime_config: Dict[str, Any]) -> Pop3EmailService:
+        use_ssl = self._to_bool(runtime_config.get("use_ssl"), default=True)
+        pop3_config = {
+            "email": str(runtime_config.get("base_email") or "").strip(),
+            "host": str(runtime_config.get("pop3_host") or "").strip(),
+            "port": int(runtime_config.get("pop3_port") or (995 if use_ssl else 110)),
+            "username": str(runtime_config.get("pop3_username") or "").strip(),
+            "password": str(runtime_config.get("pop3_password") or ""),
+            "use_ssl": use_ssl,
+            "poll_interval": int(runtime_config.get("poll_interval") or self._POLL_INTERVAL),
+            "timeout": int(runtime_config.get("timeout") or 120),
+            "max_messages": int(runtime_config.get("max_messages") or 30),
+            "subject_keyword": str(runtime_config.get("subject_keyword") or "").strip(),
+            "sender_keyword": str(runtime_config.get("sender_keyword") or "").strip(),
+        }
+        return Pop3EmailService(pop3_config, name=f"{self.name}_pop3_alias")
 
     def _resolve_endpoint_url(self, runtime_config: Dict[str, Any], path_key: str, default_path: str) -> str:
         base_url = str(runtime_config.get("base_url") or self._base_url).strip().rstrip("/")

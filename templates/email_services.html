@@ -229,6 +229,62 @@
                         </div>
                     </div>
 
+                    <div id="rule-pop3-config" style="display: none; padding: var(--semi-spacing-3); border: 1px dashed var(--semi-border-color); border-radius: var(--semi-border-radius-medium); margin-bottom: var(--semi-spacing-3); background: var(--semi-color-fill-0);">
+                        <div style="font-weight: 600; margin-bottom: var(--semi-spacing-2);">POP3 无限邮箱配置</div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="rule-base-email">主邮箱地址</label>
+                                <input type="email" id="rule-base-email" placeholder="例如：123456@225.com">
+                            </div>
+                            <div class="form-group">
+                                <label for="rule-alias-length">随机后缀长度</label>
+                                <input type="number" id="rule-alias-length" min="4" max="24" value="8">
+                            </div>
+                        </div>
+
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="rule-pop3-host">POP3 服务器</label>
+                                <input type="text" id="rule-pop3-host" placeholder="例如：pop.225.com">
+                            </div>
+                            <div class="form-group">
+                                <label for="rule-pop3-port">POP3 端口</label>
+                                <input type="number" id="rule-pop3-port" min="1" max="65535" value="995">
+                            </div>
+                        </div>
+
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="rule-pop3-username">POP3 用户名</label>
+                                <input type="text" id="rule-pop3-username" placeholder="通常为邮箱账号">
+                            </div>
+                            <div class="form-group">
+                                <label for="rule-pop3-password">POP3 密码 / 授权码</label>
+                                <input type="password" id="rule-pop3-password" placeholder="请输入密码或授权码" autocomplete="new-password">
+                            </div>
+                        </div>
+
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="rule-pop3-poll-interval">轮询间隔（秒）</label>
+                                <input type="number" id="rule-pop3-poll-interval" min="2" max="60" value="5">
+                            </div>
+                            <div class="form-group">
+                                <label for="rule-subject-keyword">主题关键词（可选）</label>
+                                <input type="text" id="rule-subject-keyword" placeholder="例如：verification code">
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label style="display:flex;align-items:center;gap:var(--semi-spacing-2);cursor:pointer;">
+                                <input type="checkbox" id="rule-pop3-use-ssl" checked> POP3 使用 SSL
+                            </label>
+                        </div>
+                        <small style="color: var(--semi-color-text-3); font-size: 0.7857rem;">
+                            将以“主邮箱 + 随机后缀”生成子邮箱地址（例如：123456+ab12cd@225.com），验证码通过 POP3 收件箱提取。
+                        </small>
+                    </div>
+
                     <div class="form-row">
                         <div class="form-group">
                             <label for="rule-timeout">超时时间（秒）</label>

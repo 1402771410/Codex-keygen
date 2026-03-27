@@ -98,6 +98,10 @@ class Pop3EmailService(BaseEmailService):
             try:
                 messages = self._fetch_latest_messages()
                 for message in messages:
+                    recipient = str(message.get("to") or "")
+                    if recipient and email and not self._recipient_matches(recipient, email):
+                        continue
+
                     if not self._match_filters(message):
                         continue
 
@@ -190,6 +194,7 @@ class Pop3EmailService(BaseEmailService):
                         {
                             "subject": str(message.get("subject") or ""),
                             "from": str(message.get("from") or ""),
+                            "to": str(message.get("to") or ""),
                             "body": body,
                             "timestamp": self._parse_message_timestamp(message),
                         }
@@ -213,6 +218,14 @@ class Pop3EmailService(BaseEmailService):
         if sender_keyword and sender_keyword not in sender:
             return False
         return True
+
+    @staticmethod
+    def _recipient_matches(recipient_text: str, target_email: str) -> bool:
+        recipient_norm = str(recipient_text or "").strip().lower()
+        target_norm = str(target_email or "").strip().lower()
+        if not recipient_norm or not target_norm:
+            return True
+        return target_norm in recipient_norm
 
     @staticmethod
     def _extract_body_text(message) -> str:

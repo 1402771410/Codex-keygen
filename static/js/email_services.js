@@ -22,6 +22,16 @@ const elements = {
     ruleBaseUrl: document.getElementById('rule-base-url'),
     ruleAddressPrefix: document.getElementById('rule-address-prefix'),
     rulePreferredDomain: document.getElementById('rule-preferred-domain'),
+    rulePop3Config: document.getElementById('rule-pop3-config'),
+    ruleBaseEmail: document.getElementById('rule-base-email'),
+    ruleAliasLength: document.getElementById('rule-alias-length'),
+    rulePop3Host: document.getElementById('rule-pop3-host'),
+    rulePop3Port: document.getElementById('rule-pop3-port'),
+    rulePop3Username: document.getElementById('rule-pop3-username'),
+    rulePop3Password: document.getElementById('rule-pop3-password'),
+    rulePop3UseSsl: document.getElementById('rule-pop3-use-ssl'),
+    rulePop3PollInterval: document.getElementById('rule-pop3-poll-interval'),
+    ruleSubjectKeyword: document.getElementById('rule-subject-keyword'),
     ruleTimeout: document.getElementById('rule-timeout'),
     ruleMaxRetries: document.getElementById('rule-max-retries'),
     ruleEnabled: document.getElementById('rule-enabled'),
@@ -35,6 +45,7 @@ const elements = {
 
 const fallbackProviders = [
     { value: 'tempmail_lol', label: 'Tempmail.lol', description: 'Token inbox 接口' },
+    { value: 'pop3_alias', label: '普通邮箱 POP3+Alias', description: '主邮箱+随机别名，POP3 收验证码' },
 ];
 
 let tempmailRules = [];
@@ -62,6 +73,40 @@ const TEST_STAGE_HINTS = {
 let testStageAutoTimer = null;
 let testStageAutoIndex = 0;
 
+function isPop3AliasProvider(provider) {
+    return String(provider || '').trim().toLowerCase() === 'pop3_alias';
+}
+
+function syncProviderSpecificFields(provider) {
+    const isPop3Alias = isPop3AliasProvider(provider);
+    if (elements.rulePop3Config) {
+        elements.rulePop3Config.style.display = isPop3Alias ? 'block' : 'none';
+    }
+
+    if (elements.ruleBaseUrl) {
+        elements.ruleBaseUrl.disabled = isPop3Alias;
+        if (isPop3Alias) {
+            elements.ruleBaseUrl.value = '';
+        }
+    }
+    if (elements.ruleAddressPrefix) {
+        elements.ruleAddressPrefix.disabled = isPop3Alias;
+    }
+    if (elements.rulePreferredDomain) {
+        elements.rulePreferredDomain.disabled = isPop3Alias;
+    }
+}
+
+function syncPop3SslPort() {
+    if (!elements.rulePop3UseSsl || !elements.rulePop3Port) {
+        return;
+    }
+    const port = Number(elements.rulePop3Port.value || 0);
+    if (!port || port === 995 || port === 110) {
+        elements.rulePop3Port.value = elements.rulePop3UseSsl.checked ? '995' : '110';
+    }
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
     bindEvents();
     await Promise.all([loadProviderOptions(), loadTempmailRules()]);
@@ -86,6 +131,14 @@ function bindEvents() {
     }
     if (elements.ruleForm) {
         elements.ruleForm.addEventListener('submit', handleSaveRule);
+    }
+    if (elements.ruleProvider) {
+        elements.ruleProvider.addEventListener('change', () => {
+            syncProviderSpecificFields(elements.ruleProvider.value);
+        });
+    }
+    if (elements.rulePop3UseSsl) {
+        elements.rulePop3UseSsl.addEventListener('change', syncPop3SslPort);
     }
 }
 
@@ -114,6 +167,11 @@ function renderProviderSelect() {
         const desc = provider.description ? ` - ${provider.description}` : '';
         return `<option value="${escapeHtml(provider.value)}">${escapeHtml(label + desc)}</option>`;
     }).join('');
+
+    if (!elements.ruleProvider.value && providerOptions.length > 0) {
+        elements.ruleProvider.value = providerOptions[0].value;
+    }
+    syncProviderSpecificFields(elements.ruleProvider.value);
 }
 
 function isRuleAvailable(rule) {
@@ -400,6 +458,19 @@ function renderTempmailRulesTable() {
         if (config.preferred_domain) {
             summaryParts.push(`域名: ${escapeHtml(config.preferred_domain)}`);
         }
+        if (item.provider === 'pop3_alias') {
+            if (config.base_email) {
+                summaryParts.push(`主邮箱: ${escapeHtml(config.base_email)}`);
+            }
+            if (config.pop3_host) {
+                const pop3Port = Number(config.pop3_port || 995);
+                summaryParts.push(`POP3: ${escapeHtml(config.pop3_host)}:${pop3Port}`);
+            }
+            if (config.alias_length) {
+                summaryParts.push(`别名长度: ${Number(config.alias_length)}`);
+            }
+            summaryParts.push(`SSL: ${config.use_ssl === false ? '关闭' : '开启'}`);
+        }
         summaryParts.push(`超时: ${Number(config.timeout || 30)}s`);
         summaryParts.push(`重试: ${Number(config.max_retries || 3)}`);
 
@@ -477,8 +548,40 @@ function openRuleModal(rule = null) {
     elements.ruleBaseUrl.value = config.base_url || '';
     elements.ruleAddressPrefix.value = config.address_prefix || '';
     elements.rulePreferredDomain.value = config.preferred_domain || '';
+    if (elements.ruleBaseEmail) {
+        elements.ruleBaseEmail.value = config.base_email || '';
+    }
+    if (elements.ruleAliasLength) {
+        elements.ruleAliasLength.value = String(config.alias_length || 8);
+    }
+    if (elements.rulePop3Host) {
+        elements.rulePop3Host.value = config.pop3_host || '';
+    }
+    if (elements.rulePop3Port) {
+        elements.rulePop3Port.value = String(config.pop3_port || 995);
+    }
+    if (elements.rulePop3Username) {
+        elements.rulePop3Username.value = config.pop3_username || '';
+    }
+    if (elements.rulePop3Password) {
+        elements.rulePop3Password.value = config.pop3_password || '';
+    }
+    if (elements.rulePop3UseSsl) {
+        const useSslRaw = config.use_ssl;
+        elements.rulePop3UseSsl.checked = typeof useSslRaw === 'boolean'
+            ? useSslRaw
+            : String(useSslRaw || 'true').toLowerCase() !== 'false';
+    }
+    if (elements.rulePop3PollInterval) {
+        elements.rulePop3PollInterval.value = String(config.poll_interval || 5);
+    }
+    if (elements.ruleSubjectKeyword) {
+        elements.ruleSubjectKeyword.value = config.subject_keyword || '';
+    }
     elements.ruleTimeout.value = String(config.timeout || 30);
     elements.ruleMaxRetries.value = String(config.max_retries || 3);
+
+    syncProviderSpecificFields(provider);
 
     syncRuleEnabledState(rule);
     elements.ruleModal.classList.add('active');
@@ -491,6 +594,7 @@ function closeRuleModalHandler() {
     if (elements.ruleProvider) {
         elements.ruleProvider.disabled = false;
     }
+    syncProviderSpecificFields(elements.ruleProvider?.value || 'tempmail_lol');
     syncRuleEnabledState(null);
 }
 
@@ -539,6 +643,40 @@ async function handleSaveRule(event) {
     }
     if (preferredDomain) {
         config.preferred_domain = preferredDomain;
+    }
+
+    if (isPop3AliasProvider(provider)) {
+        const baseEmail = (elements.ruleBaseEmail?.value || '').trim();
+        const pop3Host = (elements.rulePop3Host?.value || '').trim();
+        const pop3Port = Number(elements.rulePop3Port?.value || 995);
+        const pop3Username = (elements.rulePop3Username?.value || '').trim();
+        const pop3Password = elements.rulePop3Password?.value || '';
+        const aliasLength = Number(elements.ruleAliasLength?.value || 8);
+        const pollInterval = Number(elements.rulePop3PollInterval?.value || 5);
+        const useSsl = Boolean(elements.rulePop3UseSsl?.checked);
+        const subjectKeyword = (elements.ruleSubjectKeyword?.value || '').trim();
+
+        if (!baseEmail || !pop3Host || !pop3Username || !pop3Password) {
+            toast.error('POP3 无限邮箱配置不完整，请填写主邮箱、服务器、用户名和密码');
+            return;
+        }
+        if (!Number.isInteger(pop3Port) || pop3Port < 1 || pop3Port > 65535) {
+            toast.error('POP3 端口无效，请填写 1-65535 之间的整数');
+            return;
+        }
+
+        config.base_email = baseEmail;
+        config.pop3_host = pop3Host;
+        config.pop3_port = pop3Port;
+        config.pop3_username = pop3Username;
+        config.pop3_password = pop3Password;
+        config.use_ssl = useSsl;
+        config.alias_length = Number.isInteger(aliasLength) ? Math.max(4, aliasLength) : 8;
+        config.poll_interval = Number.isInteger(pollInterval) ? Math.max(2, pollInterval) : 5;
+        if (subjectKeyword) {
+            config.subject_keyword = subjectKeyword;
+        }
+        config.base_url = '';
     }
 
     try {
