@@ -63,8 +63,6 @@ class TempmailService(BaseEmailService):
                 email_info = self._create_email_mail_tm_like(provider, runtime_config)
             elif provider == "onesecmail":
                 email_info = self._create_email_onesecmail(runtime_config)
-            elif provider == "guerrillamail":
-                email_info = self._create_email_guerrillamail(runtime_config)
             elif provider == "pop3_alias":
                 email_info = self._create_email_pop3_alias(runtime_config)
             else:
@@ -111,13 +109,6 @@ class TempmailService(BaseEmailService):
                 logger.warning("1secmail 缺少 login/domain，无法获取验证码")
                 return None
             return self._poll_onesecmail(email, login, domain, timeout, pattern, runtime_config)
-
-        if provider == "guerrillamail":
-            sid_token = str(email_id or email_info.get("token") or "").strip()
-            if not sid_token:
-                logger.warning("GuerrillaMail 缺少 sid_token，无法获取验证码")
-                return None
-            return self._poll_guerrillamail(email, sid_token, timeout, pattern, runtime_config)
 
         if provider == "pop3_alias":
             return self._poll_pop3_alias(email, timeout, pattern, otp_sent_at, runtime_config, otp_purpose=otp_purpose)
@@ -172,16 +163,6 @@ class TempmailService(BaseEmailService):
                         runtime_config,
                         headers={"Accept": "application/json"},
                         params={"action": "getDomainList"},
-                        timeout=10,
-                    ),
-                )
-            elif provider == "guerrillamail":
-                self.http_client.get(
-                    base_url,
-                    **self._build_request_kwargs(
-                        runtime_config,
-                        headers={"Accept": "application/json"},
-                        params={"f": "get_email_address"},
                         timeout=10,
                     ),
                 )
@@ -390,66 +371,6 @@ class TempmailService(BaseEmailService):
             "provider": "onesecmail",
             "login": login,
             "domain": domain,
-            "created_at": time.time(),
-        }
-
-    def _create_email_guerrillamail(self, runtime_config: Dict[str, Any]) -> Dict[str, Any]:
-        base_url = str(runtime_config.get("base_url") or self._base_url).strip().rstrip("/")
-        address_prefix = str(runtime_config.get("address_prefix") or "").strip()
-        agent = str(runtime_config.get("agent") or "Codex-keygen").strip() or "Codex-keygen"
-        request_ip = str(runtime_config.get("request_ip") or runtime_config.get("ip") or "127.0.0.1").strip() or "127.0.0.1"
-        lang = str(runtime_config.get("lang") or "").strip()
-
-        base_params = {
-            "ip": request_ip,
-            "agent": agent,
-        }
-        if lang:
-            base_params["lang"] = lang
-
-        response = self.http_client.get(
-            base_url,
-            **self._build_request_kwargs(
-                runtime_config,
-                headers={"Accept": "application/json"},
-                params={**base_params, "f": "get_email_address"},
-            ),
-        )
-        if response.status_code != 200:
-            raise EmailServiceError(f"GuerrillaMail 创建会话失败，状态码: {response.status_code}")
-
-        data = response.json() if response.text else {}
-        sid_token = str(data.get("sid_token") or "").strip()
-        email = str(data.get("email_addr") or "").strip()
-
-        if address_prefix and sid_token:
-            set_user_resp = self.http_client.get(
-                base_url,
-                **self._build_request_kwargs(
-                    runtime_config,
-                    headers={"Accept": "application/json"},
-                    params={
-                        **base_params,
-                        "f": "set_email_user",
-                        "email_user": address_prefix,
-                        "sid_token": sid_token,
-                    },
-                ),
-            )
-            if set_user_resp.status_code == 200:
-                set_data = set_user_resp.json() if set_user_resp.text else {}
-                sid_token = str(set_data.get("sid_token") or sid_token).strip()
-                email = str(set_data.get("email_addr") or email).strip()
-
-        if not sid_token or "@" not in email:
-            raise EmailServiceError("GuerrillaMail 返回邮箱数据无效")
-
-        logger.info("创建 GuerrillaMail 邮箱成功: %s", email)
-        return {
-            "email": email,
-            "service_id": sid_token,
-            "token": sid_token,
-            "provider": "guerrillamail",
             "created_at": time.time(),
         }
 
@@ -675,87 +596,6 @@ class TempmailService(BaseEmailService):
 
             except Exception as exc:
                 logger.debug("轮询 1secmail 出错: %s", exc)
-
-            time.sleep(self._POLL_INTERVAL)
-
-        return None
-
-    def _poll_guerrillamail(
-        self,
-        email: str,
-        sid_token: str,
-        timeout: int,
-        pattern: str,
-        runtime_config: Dict[str, Any],
-    ) -> Optional[str]:
-        base_url = str(runtime_config.get("base_url") or self._base_url).strip().rstrip("/")
-        agent = str(runtime_config.get("agent") or "Codex-keygen").strip() or "Codex-keygen"
-        request_ip = str(runtime_config.get("request_ip") or runtime_config.get("ip") or "127.0.0.1").strip() or "127.0.0.1"
-        lang = str(runtime_config.get("lang") or "").strip()
-
-        base_params = {
-            "ip": request_ip,
-            "agent": agent,
-        }
-        if lang:
-            base_params["lang"] = lang
-
-        start_time = time.time()
-        seen_ids: Set[str] = set()
-
-        while time.time() - start_time < timeout:
-            try:
-                response = self.http_client.get(
-                    base_url,
-                    **self._build_request_kwargs(
-                        runtime_config,
-                        headers={"Accept": "application/json"},
-                        params={**base_params, "f": "check_email", "seq": 0, "sid_token": sid_token},
-                    ),
-                )
-                if response.status_code != 200:
-                    time.sleep(self._POLL_INTERVAL)
-                    continue
-
-                data = response.json() if response.text else {}
-                messages = data.get("list") if isinstance(data, dict) else []
-                if not isinstance(messages, list):
-                    time.sleep(self._POLL_INTERVAL)
-                    continue
-
-                for item in messages:
-                    if not isinstance(item, dict):
-                        continue
-                    msg_id = str(item.get("mail_id") or "").strip()
-                    if not msg_id or msg_id in seen_ids:
-                        continue
-                    seen_ids.add(msg_id)
-
-                    detail_resp = self.http_client.get(
-                        base_url,
-                        **self._build_request_kwargs(
-                            runtime_config,
-                            headers={"Accept": "application/json"},
-                            params={**base_params, "f": "fetch_email", "sid_token": sid_token, "email_id": msg_id},
-                        ),
-                    )
-                    if detail_resp.status_code != 200:
-                        continue
-
-                    detail = detail_resp.json() if detail_resp.text else {}
-                    sender = str(detail.get("mail_from") or item.get("mail_from") or "")
-                    subject = str(detail.get("mail_subject") or item.get("mail_subject") or "")
-                    body = str(detail.get("mail_body") or "")
-                    html = str(detail.get("mail_body") or "")
-
-                    code = self._extract_verification_code(sender, subject, body, html, pattern)
-                    if code:
-                        logger.info("邮箱 %s 获取验证码成功", email)
-                        self.update_status(True)
-                        return code
-
-            except Exception as exc:
-                logger.debug("轮询 GuerrillaMail 出错: %s", exc)
 
             time.sleep(self._POLL_INTERVAL)
 

@@ -91,12 +91,12 @@ def test_build_tempmail_config_keeps_auth_and_call_rule_fields() -> None:
     assert config["api_key_query_key"] == "alt_key"
 
 
-def test_public_provider_options_include_guerrillamail_without_pop3_alias() -> None:
+def test_public_provider_options_exclude_offline_providers() -> None:
     providers = list_tempmail_provider_options()
     values = {item["value"] for item in providers}
 
     assert "tempmail_lol" in values
-    assert "guerrillamail" in values
+    assert "guerrillamail" not in values
     assert "pop3_alias" not in values
 
 

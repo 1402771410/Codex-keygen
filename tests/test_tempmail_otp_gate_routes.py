@@ -153,11 +153,11 @@ def test_available_services_excludes_pop3_alias_rules(tmp_path, monkeypatch):
             )
             allowed = _create_tempmail_service(
                 db,
-                "GuerrillaMail Rule",
-                provider="guerrillamail",
+                "Tempmail Rule",
+                provider="tempmail_lol",
                 config={
-                    "provider": "guerrillamail",
-                    "base_url": "https://api.guerrillamail.com/ajax.php",
+                    "provider": "tempmail_lol",
+                    "base_url": "https://api.tempmail.lol/v2",
                     "timeout": 30,
                     "max_retries": 3,
                 },
@@ -176,17 +176,19 @@ def test_available_services_excludes_pop3_alias_rules(tmp_path, monkeypatch):
         providers = {item["provider"] for item in payload["tempmail"]["services"]}
 
         assert "pop3_alias" not in providers
-        assert "guerrillamail" in providers
+        assert "guerrillamail" not in providers
+        assert "tempmail_lol" in providers
     finally:
         _reset_singletons()
 
 
-def test_email_service_types_expose_guerrillamail_provider():
+def test_email_service_types_exclude_offline_providers():
     payload = asyncio.run(email_routes.get_service_types())
     providers = payload["types"][0]["providers"]
     values = {item["value"] for item in providers}
 
-    assert "guerrillamail" in values
+    assert "tempmail_lol" in values
+    assert "guerrillamail" not in values
     assert "pop3_alias" not in values
 
 
@@ -211,7 +213,33 @@ def test_create_email_service_rejects_pop3_alias_provider(tmp_path, monkeypatch)
             )
 
         assert error.value.status_code == 400
-        assert "POP 邮箱方式已下线" in error.value.detail
+        assert "已下线" in error.value.detail
+    finally:
+        _reset_singletons()
+
+
+def test_create_email_service_rejects_guerrillamail_provider(tmp_path, monkeypatch):
+    _init_test_db(tmp_path, monkeypatch, "email_service_reject_guerrilla_provider.db")
+
+    try:
+        with pytest.raises(HTTPException) as error:
+            asyncio.run(
+                email_routes.create_email_service(
+                    email_routes.EmailServiceCreate(
+                        service_type=EmailServiceType.TEMPMAIL.value,
+                        provider="guerrillamail",
+                        name="legacy-guerrilla-provider",
+                        enabled=False,
+                        config={
+                            "provider": "guerrillamail",
+                            "base_url": "https://api.guerrillamail.com/ajax.php",
+                        },
+                    )
+                )
+            )
+
+        assert error.value.status_code == 400
+        assert "已下线" in error.value.detail
     finally:
         _reset_singletons()
 
@@ -226,7 +254,7 @@ def test_start_registration_rejects_legacy_pop3_type():
         )
 
     assert error.value.status_code == 400
-    assert "POP 注册方式已下线" in error.value.detail
+    assert "仅支持可用临时邮箱规则" in error.value.detail
 
 
 def test_start_batch_registration_rejects_legacy_pop3_type():
@@ -243,7 +271,7 @@ def test_start_batch_registration_rejects_legacy_pop3_type():
         )
 
     assert error.value.status_code == 400
-    assert "POP 注册方式已下线" in error.value.detail
+    assert "仅支持可用临时邮箱规则" in error.value.detail
 
 
 def test_email_service_test_route_records_probe_success_stage(tmp_path, monkeypatch):

@@ -110,8 +110,6 @@ TEMPMAIL_PROVIDER_ALIASES = {
     "1secmail": "onesecmail",
     "one_sec_mail": "onesecmail",
     "onesecmail": "onesecmail",
-    "guerrilla": "guerrillamail",
-    "guerrillamail": "guerrillamail",
     "pop3_alias": "pop3_alias",
     "pop3-plus": "pop3_alias",
     "plus_alias": "pop3_alias",
@@ -141,12 +139,6 @@ TEMPMAIL_PROVIDER_CATALOG: Dict[str, Dict[str, Any]] = {
         "description": "Query Action 接口（action=genRandomMailbox/getMessages/readMessage）",
         "call_style": "query_actions",
         "default_base_url": "https://www.1secmail.com/api/v1/",
-    },
-    "guerrillamail": {
-        "label": "GuerrillaMail",
-        "description": "Session + Query 接口（f=get_email_address/get_email_list/fetch_email）",
-        "call_style": "session_query",
-        "default_base_url": "https://api.guerrillamail.com/ajax.php",
     },
     "pop3_alias": {
         "label": "普通邮箱 POP3+Alias（已下线）",

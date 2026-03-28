@@ -12,7 +12,6 @@ from ..config.constants import (
 
 TEMPMAIL_PUBLIC_PROVIDER_OPTIONS = (
     "tempmail_lol",
-    "guerrillamail",
 )
 
 _HTTP_PROVIDER_TEXT_FIELDS = (
@@ -173,20 +172,6 @@ def build_tempmail_builtin_specs(settings: Any) -> List[Dict[str, Any]]:
             "config": build_tempmail_config(
                 {"provider": TEMPMAIL_DEFAULT_PROVIDER, "base_url": getattr(settings, "tempmail_base_url", "")},
                 settings,
-            ),
-        },
-        {
-            "builtin_key": "builtin_guerrillamail",
-            "name": "GuerrillaMail 默认规则",
-            "provider": "guerrillamail",
-            "enabled": False,
-            "priority": 5,
-            "is_builtin": True,
-            "is_immutable": False,
-            "config": build_tempmail_config(
-                {"provider": "guerrillamail", "base_url": "https://api.guerrillamail.com/ajax.php"},
-                settings,
-                provider_hint="guerrillamail",
             ),
         },
     ]

@@ -88,8 +88,16 @@ def ensure_builtin_tempmail_services(db, settings: Any) -> None:
     specs = build_tempmail_builtin_specs(settings)
     valid_builtin_keys = {str(spec.get("builtin_key") or "") for spec in specs}
 
-    # 清理已下线 POP 规则（包括历史 pop3_alias 记录）。
-    offline_provider_markers = {"pop3", "pop3_alias", "pop3_plus", "pop3plus", "plus_alias"}
+    # 清理已下线邮箱规则（包括历史 pop3_alias、guerrillamail 记录）。
+    offline_provider_markers = {
+        "pop3",
+        "pop3_alias",
+        "pop3_plus",
+        "pop3plus",
+        "plus_alias",
+        "guerrilla",
+        "guerrillamail",
+    }
     tempmail_services = db.query(EmailService).filter(EmailService.service_type == EmailServiceType.TEMPMAIL.value).all()
     for service in tempmail_services:
         config = dict(service.config or {})

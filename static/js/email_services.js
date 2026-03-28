@@ -37,7 +37,6 @@ const elements = {
 
 const fallbackProviders = [
     { value: 'tempmail_lol', label: 'Tempmail.lol', description: 'Token inbox 接口' },
-    { value: 'guerrillamail', label: 'GuerrillaMail', description: 'Session Query 接口（f=get_email_address/get_email_list/fetch_email）' },
 ];
 
 let tempmailRules = [];

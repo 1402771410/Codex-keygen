@@ -26,12 +26,14 @@ from ...services.tempmail_catalog import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-_OFFLINE_POP_PROVIDERS = {
+_OFFLINE_PROVIDER_MARKERS = {
     "pop3",
     "pop3_alias",
     "pop3_plus",
     "pop3plus",
     "plus_alias",
+    "guerrilla",
+    "guerrillamail",
 }
 
 
@@ -39,14 +41,14 @@ def _normalize_provider_marker(value: Any) -> str:
     return str(value or "").strip().lower().replace("-", "_").replace(" ", "")
 
 
-def _is_offline_pop_provider(value: Any) -> bool:
-    return _normalize_provider_marker(value) in _OFFLINE_POP_PROVIDERS
+def _is_offline_provider(value: Any) -> bool:
+    return _normalize_provider_marker(value) in _OFFLINE_PROVIDER_MARKERS
 
 
-def _service_is_offline_pop(service: EmailServiceModel) -> bool:
+def _service_is_offline_provider(service: EmailServiceModel) -> bool:
     config = dict(service.config or {})
     return any(
-        _is_offline_pop_provider(candidate)
+        _is_offline_provider(candidate)
         for candidate in [service.provider, config.get("provider"), config.get("type")]
     )
 
@@ -71,7 +73,7 @@ def _ensure_builtin_seeded(db) -> None:
     ).all()
     removed_ids: List[int] = []
     for stale in stale_services:
-        if not _service_is_offline_pop(stale):
+        if not _service_is_offline_provider(stale):
             continue
         removed_ids.append(int(stale.id))
         db.delete(stale)
@@ -81,7 +83,7 @@ def _ensure_builtin_seeded(db) -> None:
         runtime_state = get_tempmail_runtime_state(db, settings)
         if runtime_state.get("single_service_id") in set(removed_ids):
             update_tempmail_runtime_state(db, settings, single_service_id=None)
-        logger.warning("已清理下线 POP 规则: %s", removed_ids)
+        logger.warning("已清理下线邮箱规则: %s", removed_ids)
 
 
 def _compose_stage_message(stage: str, message: str) -> str:
@@ -270,9 +272,6 @@ async def get_service_types():
                     {"name": "api_key", "label": "API Key（如供应商需要）", "required": False, "placeholder": "可选"},
                     {"name": "timeout", "label": "超时时间（秒）", "required": False, "default": 30},
                     {"name": "max_retries", "label": "最大重试次数", "required": False, "default": 3},
-                    {"name": "request_ip", "label": "请求 IP（GuerrillaMail）", "required": False, "placeholder": "默认 127.0.0.1"},
-                    {"name": "agent", "label": "请求 UA（GuerrillaMail）", "required": False, "placeholder": "默认 Codex-keygen"},
-                    {"name": "lang", "label": "语言（GuerrillaMail，可选）", "required": False, "placeholder": "例如：en"},
                 ],
             }
         ]
@@ -298,7 +297,7 @@ async def list_email_services(
         services = [
             item
             for item in query.order_by(EmailServiceModel.priority.asc(), EmailServiceModel.id.asc()).all()
-            if not _service_is_offline_pop(item)
+            if not _service_is_offline_provider(item)
         ]
         return EmailServiceListResponse(total=len(services), services=[_service_to_response(item) for item in services])
 
@@ -309,7 +308,7 @@ async def get_email_service(service_id: int):
     with get_db() as db:
         _ensure_builtin_seeded(db)
         service = db.query(EmailServiceModel).filter(EmailServiceModel.id == service_id).first()
-        if not service or _service_is_offline_pop(service):
+        if not service or _service_is_offline_provider(service):
             raise HTTPException(status_code=404, detail="服务不存在")
         _ensure_tempmail_type(service.service_type)
         return _service_to_response(service)
@@ -321,7 +320,7 @@ async def get_email_service_full(service_id: int):
     with get_db() as db:
         _ensure_builtin_seeded(db)
         service = db.query(EmailServiceModel).filter(EmailServiceModel.id == service_id).first()
-        if not service or _service_is_offline_pop(service):
+        if not service or _service_is_offline_provider(service):
             raise HTTPException(status_code=404, detail="服务不存在")
         _ensure_tempmail_type(service.service_type)
 
@@ -334,8 +333,8 @@ async def create_email_service(request: EmailServiceCreate):
     """创建临时邮箱服务。"""
     _ensure_tempmail_type(request.service_type)
     requested_provider = request.provider or request.config.get("provider")
-    if _is_offline_pop_provider(requested_provider):
-        raise HTTPException(status_code=400, detail="POP 邮箱方式已下线，请使用临时邮箱供应商")
+    if _is_offline_provider(requested_provider):
+        raise HTTPException(status_code=400, detail="该邮箱供应商已下线，请使用其他临时邮箱供应商")
     provider = normalize_tempmail_provider(requested_provider)
 
     with get_db() as db:
@@ -381,7 +380,7 @@ async def update_email_service(service_id: int, request: EmailServiceUpdate):
         _ensure_builtin_seeded(db)
 
         service = db.query(EmailServiceModel).filter(EmailServiceModel.id == service_id).first()
-        if not service or _service_is_offline_pop(service):
+        if not service or _service_is_offline_provider(service):
             raise HTTPException(status_code=404, detail="服务不存在")
         _ensure_tempmail_type(service.service_type)
         _guard_immutable_update(service, request)
@@ -400,8 +399,8 @@ async def update_email_service(service_id: int, request: EmailServiceUpdate):
             incoming = dict(request.config)
             # provider 由创建阶段决定，避免误改调用方式
             incoming.pop("provider", None)
-            if _is_offline_pop_provider(incoming.get("type")):
-                raise HTTPException(status_code=400, detail="POP 邮箱方式已下线，请使用临时邮箱供应商")
+            if _is_offline_provider(incoming.get("type")):
+                raise HTTPException(status_code=400, detail="该邮箱供应商已下线，请使用其他临时邮箱供应商")
             merged.update(incoming)
             service.config = _normalize_tempmail_config(merged, provider_hint=service.provider)
 
@@ -433,7 +432,7 @@ async def delete_email_service(service_id: int):
         _ensure_builtin_seeded(db)
 
         service = db.query(EmailServiceModel).filter(EmailServiceModel.id == service_id).first()
-        if not service or _service_is_offline_pop(service):
+        if not service or _service_is_offline_provider(service):
             raise HTTPException(status_code=404, detail="服务不存在")
         _ensure_tempmail_type(service.service_type)
 
@@ -460,7 +459,7 @@ async def test_email_service(service_id: int):
         _ensure_builtin_seeded(db)
 
         service = db.query(EmailServiceModel).filter(EmailServiceModel.id == service_id).first()
-        if not service or _service_is_offline_pop(service):
+        if not service or _service_is_offline_provider(service):
             raise HTTPException(status_code=404, detail="服务不存在")
         _ensure_tempmail_type(service.service_type)
 
@@ -513,7 +512,7 @@ async def enable_email_service(service_id: int):
         _ensure_builtin_seeded(db)
 
         service = db.query(EmailServiceModel).filter(EmailServiceModel.id == service_id).first()
-        if not service or _service_is_offline_pop(service):
+        if not service or _service_is_offline_provider(service):
             raise HTTPException(status_code=404, detail="服务不存在")
         _ensure_tempmail_type(service.service_type)
         _ensure_service_can_enable(service)
@@ -536,7 +535,7 @@ async def disable_email_service(service_id: int):
         _ensure_builtin_seeded(db)
 
         service = db.query(EmailServiceModel).filter(EmailServiceModel.id == service_id).first()
-        if not service or _service_is_offline_pop(service):
+        if not service or _service_is_offline_provider(service):
             raise HTTPException(status_code=404, detail="服务不存在")
         _ensure_tempmail_type(service.service_type)
 
