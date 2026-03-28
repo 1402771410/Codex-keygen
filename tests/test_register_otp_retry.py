@@ -1,4 +1,4 @@
-from typing import Any, cast
+from typing import Any, Optional, Set, cast
 
 from src.core.register import RegistrationEngine, SignupFormResult
 from src.services.base import BaseEmailService
@@ -29,7 +29,7 @@ def test_wait_verification_code_with_retry_resends_until_success():
     engine, logs = _build_engine_with_log_collector()
 
     results = iter([None, "654321"])
-    engine._get_verification_code = lambda otp_purpose=None: next(results)
+    engine._get_verification_code_with_ignore = lambda otp_purpose=None, ignored_codes=None: next(results)
 
     send_calls = []
 
@@ -53,7 +53,7 @@ def test_wait_verification_code_with_retry_resends_until_success():
 def test_wait_verification_code_with_retry_reports_failure_after_three_attempts():
     engine, logs = _build_engine_with_log_collector()
 
-    engine._get_verification_code = lambda otp_purpose=None: None
+    engine._get_verification_code_with_ignore = lambda otp_purpose=None, ignored_codes=None: None
 
     send_calls = []
 
@@ -74,6 +74,47 @@ def test_wait_verification_code_with_retry_reports_failure_after_three_attempts(
     assert any("重试 3 次后仍未获取到验证码" in message for _, message in logs)
 
 
+def test_wait_verification_code_with_retry_retries_when_validation_fails():
+    engine, logs = _build_engine_with_log_collector()
+
+    codes = iter(["111111", "222222"])
+    ignored_code_sets: list[set[str]] = []
+
+    def _fake_get_code(otp_purpose: Optional[str] = None, ignored_codes: Optional[Set[str]] = None):
+        ignored_code_sets.append(set(ignored_codes or set()))
+        return next(codes)
+
+    engine._get_verification_code_with_ignore = _fake_get_code
+
+    send_calls: list[str] = []
+
+    def _resend_callback() -> bool:
+        send_calls.append("resend")
+        return True
+
+    validate_calls: list[str] = []
+
+    def _validate_callback(code: str) -> bool:
+        validate_calls.append(code)
+        return code == "222222"
+
+    code = engine._wait_verification_code_with_retry(
+        otp_purpose="login",
+        stage_label="10. 验证码",
+        resend_callback=_resend_callback,
+        max_attempts=3,
+        send_before_first_attempt=False,
+        validate_callback=_validate_callback,
+    )
+
+    assert code == "222222"
+    assert validate_calls == ["111111", "222222"]
+    assert len(send_calls) == 1
+    assert ignored_code_sets[0] == set()
+    assert ignored_code_sets[1] == {"111111"}
+    assert any("验证码校验失败" in message for _, message in logs)
+
+
 def test_get_verification_code_login_ignores_fixed_sender_filter():
     engine, logs = _build_engine_with_log_collector()
     fake_email_service = _FakeEmailService()
@@ -91,6 +132,28 @@ def test_get_verification_code_login_ignores_fixed_sender_filter():
     assert fake_email_service.calls
     assert fake_email_service.calls[0]["email"] == "w110715cun931vm6in@2925.com"
     assert any("忽略固定发件人过滤" in message for _, message in logs)
+
+
+def test_get_verification_code_with_ignore_forwards_ignored_codes_to_service():
+    engine, _logs = _build_engine_with_log_collector()
+    fake_email_service = _FakeEmailService()
+
+    engine.email = "user@example.com"
+    engine.email_info = {"service_id": "mailbox-ignore"}
+    engine._otp_sent_at = 100.0
+    engine._is_existing_account = True
+    engine.email_service = cast(BaseEmailService, fake_email_service)
+
+    code = engine._get_verification_code_with_ignore(
+        otp_purpose="login",
+        ignored_codes={"123456", "654321"},
+    )
+
+    assert code is None
+    assert fake_email_service.calls
+    forwarded = fake_email_service.config.get("ignored_codes")
+    assert isinstance(forwarded, list)
+    assert set(forwarded) == {"123456", "654321"}
 
 
 def test_fallback_otp_page_logs_send_status_and_uses_retry_helper():

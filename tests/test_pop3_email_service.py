@@ -272,3 +272,47 @@ def test_pop3_get_verification_code_falls_back_to_stale_message_when_no_new_mess
 
     code = service.get_verification_code(email="user@example.com", timeout=30, otp_sent_at=now)
     assert code == "987654"
+
+
+def test_pop3_get_verification_code_prefers_code_near_otp_context(monkeypatch):
+    service = Pop3EmailService(
+        {
+            "email": "user@example.com",
+            "host": "pop.example.com",
+            "port": 995,
+            "username": "user@example.com",
+            "password": "secret",
+            "use_ssl": True,
+            "poll_interval": 2,
+            "timeout": 30,
+            "otp_purpose": "login",
+        }
+    )
+
+    service.create_email()
+
+    monkeypatch.setattr(
+        service,
+        "_fetch_latest_messages",
+        lambda: [
+            {
+                "subject": "OpenAI activity summary 654321",
+                "from": "updates@openai-mail.example",
+                "to": "user@example.com",
+                "delivered_to": "user@example.com",
+                "x_original_to": "",
+                "envelope_to": "",
+                "cc": "",
+                "resent_to": "",
+                "resent_cc": "",
+                "body": (
+                    "Account overview id 654321. "
+                    "If you were not trying to log in to OpenAI, your verification code is 112233"
+                ),
+                "timestamp": time.time(),
+            }
+        ],
+    )
+
+    code = service.get_verification_code(email="user@example.com", timeout=30)
+    assert code == "112233"

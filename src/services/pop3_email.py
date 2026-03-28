@@ -53,6 +53,16 @@ class Pop3EmailService(BaseEmailService):
         "please ignore this email if this wasn't you trying to create a chatgpt account",
     )
     _EMAIL_PATTERN = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+    _OTP_CONTEXT_KEYWORDS = (
+        "verification code",
+        "one-time code",
+        "one time code",
+        "one-time passcode",
+        "one time passcode",
+        "otp",
+        "code",
+        "验证码",
+    )
 
     def __init__(self, config: Optional[Dict[str, Any]] = None, name: Optional[str] = None):
         super().__init__(EmailServiceType.POP3, str(name or "pop3_email_service"))
@@ -73,6 +83,7 @@ class Pop3EmailService(BaseEmailService):
             "max_messages": max(1, int(source.get("max_messages") or 30)),
             "subject_keyword": str(source.get("subject_keyword") or "").strip(),
             "sender_keyword": str(source.get("sender_keyword") or "").strip(),
+            "ignored_codes": list(source.get("ignored_codes") or []),
             "otp_purpose": str(source.get("otp_purpose") or "").strip().lower(),
             "clock_skew_tolerance": max(0, int(source.get("clock_skew_tolerance") or 120)),
         }
@@ -116,13 +127,20 @@ class Pop3EmailService(BaseEmailService):
         poll_interval = max(2, int(self.config.get("poll_interval") or 5))
         effective_timeout = max(15, int(timeout or self.config.get("timeout") or 120))
         start = time.time()
+        best_stale_candidate: Optional[tuple[int, int, float, str]] = None
 
         while time.time() - start < effective_timeout:
             try:
                 messages = self._fetch_latest_messages()
                 purpose = str(self.config.get("otp_purpose") or "").strip().lower()
                 skew_tolerance = max(0, int(self.config.get("clock_skew_tolerance") or 120))
-                matched_codes: List[tuple[int, int, float, str]] = []
+                ignored_codes = {
+                    str(code).strip()
+                    for code in (self.config.get("ignored_codes") or [])
+                    if str(code).strip()
+                }
+                fresh_candidates: List[tuple[int, int, float, str]] = []
+                stale_candidates: List[tuple[int, int, float, str]] = []
 
                 for message in messages:
                     if email and not self._message_targets_email(message, email):
@@ -144,26 +162,36 @@ class Pop3EmailService(BaseEmailService):
 
                     body = str(message.get("body") or "")
                     subject = str(message.get("subject") or "")
-                    search_text = f"{subject}\n{body}" if subject else body
-                    match = re.search(pattern, search_text)
-                    if match:
-                        code = match.group(1) if match.lastindex else match.group(0)
+                    scored_codes = self._extract_scored_codes(subject, body, pattern)
+                    for code_score, code in scored_codes:
+                        if code in ignored_codes:
+                            continue
                         code_ts = timestamp if isinstance(timestamp, float) else 0.0
-                        stale_rank = 0 if message_is_stale else 1
-                        matched_codes.append((stale_rank, purpose_score, code_ts, code))
+                        candidate = (purpose_score, code_score, code_ts, code)
+                        if message_is_stale:
+                            stale_candidates.append(candidate)
+                        else:
+                            fresh_candidates.append(candidate)
 
-                if matched_codes:
-                    matched_codes.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
+                if fresh_candidates:
+                    fresh_candidates.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
                     self.update_status(True)
-                    best = matched_codes[0]
-                    if best[0] == 0 and otp_sent_at:
-                        logger.warning("检测到验证码邮件时间戳早于 otp_sent_at，已回退使用最新可匹配邮件")
-                    return best[3]
+                    return fresh_candidates[0][3]
+
+                if stale_candidates:
+                    stale_candidates.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
+                    if not best_stale_candidate or stale_candidates[0] > best_stale_candidate:
+                        best_stale_candidate = stale_candidates[0]
             except Exception as exc:
                 # 读取失败继续轮询，避免瞬时网络抖动直接终止。
                 self.update_status(False, exc)
 
             time.sleep(poll_interval)
+
+        if best_stale_candidate:
+            logger.warning("未命中新邮件时间戳，已回退使用最新可匹配验证码")
+            self.update_status(True)
+            return best_stale_candidate[3]
 
         return None
 
@@ -364,6 +392,64 @@ class Pop3EmailService(BaseEmailService):
             if normalized and normalized not in candidates:
                 candidates.append(normalized)
         return candidates
+
+    def _extract_scored_codes(self, subject: str, body: str, pattern: str) -> List[tuple[int, str]]:
+        code_scores: Dict[str, int] = {}
+        keyword_group = r"(?:verification\s*code|one[-\s]?time\s*(?:pass)?code|otp|验证码|code)"
+
+        for source, text in (("subject", subject), ("body", body)):
+            if not text:
+                continue
+
+            text_norm = self._normalize_text(text)
+
+            for match in re.finditer(pattern, text):
+                if match.lastindex:
+                    code = match.group(1)
+                    span_start, span_end = match.span(1)
+                else:
+                    code = match.group(0)
+                    span_start, span_end = match.span(0)
+
+                code = str(code or "").strip()
+                if not code:
+                    continue
+
+                pre_ctx = self._normalize_text(text[max(0, span_start - 32):span_start])
+                post_ctx = self._normalize_text(text[span_end:min(len(text), span_end + 32)])
+                around_ctx = self._normalize_text(text[max(0, span_start - 56):min(len(text), span_end + 56)])
+
+                score = 1
+                if source == "body":
+                    score += 1
+                else:
+                    score -= 1
+
+                if "openai" in around_ctx or "chatgpt" in around_ctx:
+                    score += 1
+
+                if any(keyword in pre_ctx for keyword in self._OTP_CONTEXT_KEYWORDS):
+                    score += 4
+                if any(keyword in post_ctx for keyword in self._OTP_CONTEXT_KEYWORDS):
+                    score += 3
+
+                if re.search(r"\b(id|order|ticket|summary|reference|ref)\b", pre_ctx):
+                    score -= 2
+
+                code_escaped = re.escape(code)
+                if re.search(rf"{keyword_group}\D{{0,20}}{code_escaped}", text_norm):
+                    score += 8
+                elif re.search(rf"{code_escaped}\D{{0,20}}{keyword_group}", text_norm):
+                    score += 6
+
+                prev_score = code_scores.get(code, -10**9)
+                if score > prev_score:
+                    code_scores[code] = score
+
+        if not code_scores:
+            return []
+
+        return sorted(((score, code) for code, score in code_scores.items()), key=lambda item: item[0], reverse=True)
 
     @staticmethod
     def _normalize_email(value: Any) -> str:

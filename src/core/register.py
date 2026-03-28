@@ -611,6 +611,14 @@ class RegistrationEngine:
 
     def _get_verification_code(self, otp_purpose: Optional[str] = None) -> Optional[str]:
         """获取验证码"""
+        return self._get_verification_code_with_ignore(otp_purpose=otp_purpose, ignored_codes=None)
+
+    def _get_verification_code_with_ignore(
+        self,
+        otp_purpose: Optional[str] = None,
+        ignored_codes: Optional[set[str]] = None,
+    ) -> Optional[str]:
+        """获取验证码（支持忽略已判定无效的验证码）。"""
         try:
             email = self.email
             if not email:
@@ -627,6 +635,9 @@ class RegistrationEngine:
             email_service_config = getattr(self.email_service, "config", None)
             if isinstance(email_service_config, dict):
                 email_service_config["otp_purpose"] = effective_purpose
+                email_service_config["ignored_codes"] = sorted(
+                    {str(code).strip() for code in (ignored_codes or set()) if str(code).strip()}
+                )
                 sender_keyword = str(email_service_config.get("sender_keyword") or "").strip()
                 subject_keyword = str(email_service_config.get("subject_keyword") or "").strip()
                 if effective_purpose == "login" and sender_keyword:
@@ -664,11 +675,13 @@ class RegistrationEngine:
         resend_callback: Optional[Callable[[], bool]] = None,
         max_attempts: Optional[int] = None,
         send_before_first_attempt: bool = False,
+        validate_callback: Optional[Callable[[str], bool]] = None,
     ) -> Optional[str]:
         """等待验证码，超时后按上限重发。"""
         total_attempts = int(max_attempts or self.OTP_RETRY_MAX_ATTEMPTS or 3)
         if total_attempts < 1:
             total_attempts = 1
+        rejected_codes: set[str] = set()
 
         for attempt in range(1, total_attempts + 1):
             should_send = send_before_first_attempt or attempt > 1
@@ -690,8 +703,27 @@ class RegistrationEngine:
                         )
                     continue
 
-            code = self._get_verification_code(otp_purpose=otp_purpose)
+            code = self._get_verification_code_with_ignore(
+                otp_purpose=otp_purpose,
+                ignored_codes=rejected_codes,
+            )
             if code:
+                if validate_callback:
+                    self._log(f"{stage_label} 验证验证码（第 {attempt}/{total_attempts} 次）...")
+                    if validate_callback(code):
+                        return code
+
+                    self._log(
+                        f"{stage_label} 本次验证码校验失败，将重发并继续尝试",
+                        "warning",
+                    )
+                    rejected_codes.add(code)
+                    if attempt < total_attempts:
+                        self._log(
+                            f"{stage_label} 准备下一次重试（第 {attempt + 1}/{total_attempts} 次）",
+                            "warning",
+                        )
+                        continue
                 return code
 
             if attempt < total_attempts:
@@ -700,7 +732,10 @@ class RegistrationEngine:
                     "warning",
                 )
 
-        self._log(f"{stage_label} 重试 {total_attempts} 次后仍未获取到验证码", "error")
+        if validate_callback:
+            self._log(f"{stage_label} 重试 {total_attempts} 次后仍未获取可通过校验的验证码", "error")
+        else:
+            self._log(f"{stage_label} 重试 {total_attempts} 次后仍未获取到验证码", "error")
         return None
 
     def _validate_verification_code(self, code: str) -> bool:
@@ -913,14 +948,10 @@ class RegistrationEngine:
             resend_callback=fallback_resend_callback,
             max_attempts=self.OTP_RETRY_MAX_ATTEMPTS,
             send_before_first_attempt=fallback_send_before_first,
+            validate_callback=self._validate_verification_code,
         )
         if not code:
             self._log("降级登录失败：获取验证码失败（已达到重试上限）", "error")
-            return None
-
-        self._log("降级登录: 验证验证码...")
-        if not self._validate_verification_code(code):
-            self._log("降级登录失败：验证验证码失败", "error")
             return None
 
         workspace_id = self._get_workspace_id()
@@ -1344,16 +1375,13 @@ class RegistrationEngine:
                 resend_callback=resend_callback,
                 max_attempts=self.OTP_RETRY_MAX_ATTEMPTS,
                 send_before_first_attempt=False,
+                validate_callback=self._validate_verification_code,
             )
             if not code:
-                result.error_message = f"获取验证码失败（已重试 {self.OTP_RETRY_MAX_ATTEMPTS} 次）"
+                result.error_message = f"获取或验证验证码失败（已重试 {self.OTP_RETRY_MAX_ATTEMPTS} 次）"
                 return result
 
-            # 11. 验证验证码
-            self._log("11. 验证验证码...")
-            if not self._validate_verification_code(code):
-                result.error_message = "验证验证码失败"
-                return result
+            self._log("11. 验证验证码：已在重试流程中完成")
 
             workspace_id: Optional[str] = None
             account_created = False
