@@ -396,13 +396,23 @@ class TempmailService(BaseEmailService):
     def _create_email_guerrillamail(self, runtime_config: Dict[str, Any]) -> Dict[str, Any]:
         base_url = str(runtime_config.get("base_url") or self._base_url).strip().rstrip("/")
         address_prefix = str(runtime_config.get("address_prefix") or "").strip()
+        agent = str(runtime_config.get("agent") or "Codex-keygen").strip() or "Codex-keygen"
+        request_ip = str(runtime_config.get("request_ip") or runtime_config.get("ip") or "127.0.0.1").strip() or "127.0.0.1"
+        lang = str(runtime_config.get("lang") or "").strip()
+
+        base_params = {
+            "ip": request_ip,
+            "agent": agent,
+        }
+        if lang:
+            base_params["lang"] = lang
 
         response = self.http_client.get(
             base_url,
             **self._build_request_kwargs(
                 runtime_config,
                 headers={"Accept": "application/json"},
-                params={"f": "get_email_address", "agent": "Codex-keygen"},
+                params={**base_params, "f": "get_email_address"},
             ),
         )
         if response.status_code != 200:
@@ -419,10 +429,10 @@ class TempmailService(BaseEmailService):
                     runtime_config,
                     headers={"Accept": "application/json"},
                     params={
+                        **base_params,
                         "f": "set_email_user",
                         "email_user": address_prefix,
                         "sid_token": sid_token,
-                        "agent": "Codex-keygen",
                     },
                 ),
             )
@@ -679,6 +689,17 @@ class TempmailService(BaseEmailService):
         runtime_config: Dict[str, Any],
     ) -> Optional[str]:
         base_url = str(runtime_config.get("base_url") or self._base_url).strip().rstrip("/")
+        agent = str(runtime_config.get("agent") or "Codex-keygen").strip() or "Codex-keygen"
+        request_ip = str(runtime_config.get("request_ip") or runtime_config.get("ip") or "127.0.0.1").strip() or "127.0.0.1"
+        lang = str(runtime_config.get("lang") or "").strip()
+
+        base_params = {
+            "ip": request_ip,
+            "agent": agent,
+        }
+        if lang:
+            base_params["lang"] = lang
+
         start_time = time.time()
         seen_ids: Set[str] = set()
 
@@ -689,7 +710,7 @@ class TempmailService(BaseEmailService):
                     **self._build_request_kwargs(
                         runtime_config,
                         headers={"Accept": "application/json"},
-                        params={"f": "get_email_list", "sid_token": sid_token, "offset": 0},
+                        params={**base_params, "f": "check_email", "seq": 0, "sid_token": sid_token},
                     ),
                 )
                 if response.status_code != 200:
@@ -715,7 +736,7 @@ class TempmailService(BaseEmailService):
                         **self._build_request_kwargs(
                             runtime_config,
                             headers={"Accept": "application/json"},
-                            params={"f": "fetch_email", "sid_token": sid_token, "email_id": msg_id},
+                            params={**base_params, "f": "fetch_email", "sid_token": sid_token, "email_id": msg_id},
                         ),
                     )
                     if detail_resp.status_code != 200:

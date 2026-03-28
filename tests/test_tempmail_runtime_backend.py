@@ -157,3 +157,70 @@ def test_routes_use_service_runtime_state_instead_of_global_settings(tmp_path, m
                 registration_routes._select_tempmail_service(db, settings, None)
     finally:
         _reset_singletons()
+
+
+def test_select_tempmail_service_skips_offline_pop3_alias(tmp_path, monkeypatch):
+    db_path = tmp_path / "route_skip_pop3_alias.db"
+    db_url = f"sqlite:///{db_path.as_posix()}"
+
+    monkeypatch.setenv("APP_DATABASE_URL", db_url)
+    _reset_singletons()
+    initialize_database(db_url)
+
+    try:
+        settings = get_settings()
+
+        with get_db() as db:
+            ensure_builtin_tempmail_services(db, settings)
+
+            pop_rule = EmailService(
+                service_type=EmailServiceType.TEMPMAIL.value,
+                provider="pop3_alias",
+                name="Legacy POP3 Alias",
+                config={
+                    "provider": "pop3_alias",
+                    "base_email": "123456@225.com",
+                    "pop3_host": "pop.225.com",
+                    "pop3_port": 995,
+                    "pop3_username": "123456@225.com",
+                    "pop3_password": "secret",
+                    "timeout": 30,
+                },
+                enabled=True,
+                priority=1,
+                is_builtin=False,
+                is_immutable=False,
+            )
+            guerrilla_rule = EmailService(
+                service_type=EmailServiceType.TEMPMAIL.value,
+                provider="guerrillamail",
+                name="GuerrillaMail Rule",
+                config={
+                    "provider": "guerrillamail",
+                    "base_url": "https://api.guerrillamail.com/ajax.php",
+                    "timeout": 30,
+                    "max_retries": 3,
+                },
+                enabled=True,
+                priority=2,
+                is_builtin=False,
+                is_immutable=False,
+            )
+            db.add(pop_rule)
+            db.add(guerrilla_rule)
+            db.commit()
+            db.refresh(pop_rule)
+            db.refresh(guerrilla_rule)
+
+            update_tempmail_runtime_state(
+                db,
+                settings,
+                selection_mode="single",
+                single_service_id=pop_rule.id,
+            )
+
+            selected = registration_routes._select_tempmail_service(db, settings, None)
+            assert selected is not None
+            assert selected.provider != "pop3_alias"
+    finally:
+        _reset_singletons()

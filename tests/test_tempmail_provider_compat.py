@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from typing import Any, Callable, Dict, Optional
 
 from src.services.tempmail import TempmailService
-from src.services.tempmail_catalog import build_tempmail_config
+from src.services.tempmail_catalog import build_tempmail_config, list_tempmail_provider_options
 
 
 class FakeResponse:
@@ -89,6 +89,15 @@ def test_build_tempmail_config_keeps_auth_and_call_rule_fields() -> None:
     assert config["fallback_domain"] == "fallback.example"
     assert config["api_key_header"] == "X-Alt-Key"
     assert config["api_key_query_key"] == "alt_key"
+
+
+def test_public_provider_options_include_guerrillamail_without_pop3_alias() -> None:
+    providers = list_tempmail_provider_options()
+    values = {item["value"] for item in providers}
+
+    assert "tempmail_lol" in values
+    assert "guerrillamail" in values
+    assert "pop3_alias" not in values
 
 
 def test_build_tempmail_config_pop3_alias_strips_http_fields() -> None:

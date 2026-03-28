@@ -204,41 +204,10 @@ def _normalize_email_service_config(
         settings = get_settings()
         provider_hint = str(normalized.get("provider") or "").strip() or None
         normalized = build_tempmail_config(normalized, settings, provider_hint=provider_hint)
-    elif service_type == EmailServiceType.POP3:
-        use_ssl_raw = normalized.get("use_ssl")
-        if isinstance(use_ssl_raw, bool):
-            use_ssl = use_ssl_raw
-        else:
-            use_ssl = str(use_ssl_raw or "true").strip().lower() in {"1", "true", "yes", "on"}
-
-        default_port = 995 if use_ssl else 110
-        normalized = {
-            **normalized,
-            "host": str(normalized.get("host") or "").strip(),
-            "port": int(normalized.get("port") or default_port),
-            "username": str(normalized.get("username") or "").strip(),
-            "password": str(normalized.get("password") or ""),
-            "email": str(normalized.get("email") or normalized.get("username") or "").strip(),
-            "use_ssl": use_ssl,
-            "poll_interval": max(2, int(normalized.get("poll_interval") or 5)),
-            "timeout": max(15, int(normalized.get("timeout") or 120)),
-            "max_messages": max(1, int(normalized.get("max_messages") or 30)),
-            "subject_keyword": str(normalized.get("subject_keyword") or "").strip(),
-            "sender_keyword": str(normalized.get("sender_keyword") or "").strip(),
-        }
-
     if proxy_url and 'proxy_url' not in normalized:
         normalized['proxy_url'] = proxy_url
 
     return normalized
-
-
-def _validate_pop3_registration_config(config: Dict[str, Any]) -> None:
-    """校验 POP3 注册所需配置。"""
-    required_fields = ("host", "port", "username", "password", "email")
-    missing = [field for field in required_fields if not config.get(field)]
-    if missing:
-        raise ValueError(f"POP3 配置缺少必填项: {', '.join(missing)}")
 
 
 def _parse_hhmm(value: str) -> Tuple[int, int]:
@@ -255,6 +224,15 @@ def _normalize_time_window(window_start: str, window_end: str) -> Tuple[str, str
     start_hour, start_minute = _parse_hhmm(window_start)
     end_hour, end_minute = _parse_hhmm(window_end)
     return f"{start_hour:02d}:{start_minute:02d}", f"{end_hour:02d}:{end_minute:02d}"
+
+
+def _is_pop3_alias_provider(provider_raw: Any) -> bool:
+    return str(provider_raw or "").strip().lower() == "pop3_alias"
+
+
+def _extract_tempmail_provider(service: Any) -> str:
+    config = dict(cast(dict, service.config or {}))
+    return str(service.provider or config.get("provider") or "tempmail_lol").strip().lower()
 
 
 def _get_loop_window_state(
@@ -318,6 +296,8 @@ def _select_tempmail_service(db, settings, explicit_service_id: Optional[int]):
         selected = base_query.filter(EmailServiceModel.id == explicit_service_id).first()
         if not selected:
             raise ValueError(f"临时邮箱服务不存在或已禁用: {explicit_service_id}")
+        if _is_pop3_alias_provider(_extract_tempmail_provider(selected)):
+            raise ValueError("POP 注册方式已下线，请改用临时邮箱规则（Tempmail.lol/GuerrillaMail）")
         return selected
 
     selection_mode = str(runtime_state["selection_mode"] or "single").strip().lower()
@@ -326,18 +306,30 @@ def _select_tempmail_service(db, settings, explicit_service_id: Optional[int]):
         if single_service_id:
             selected = base_query.filter(EmailServiceModel.id == single_service_id).first()
             if selected:
-                return selected
-            raise ValueError(f"single 模式指定服务不存在或已禁用: {single_service_id}")
+                if _is_pop3_alias_provider(_extract_tempmail_provider(selected)):
+                    logger.warning("single 模式指定了已下线 POP 规则(ID=%s)，自动回退到临时邮箱规则", single_service_id)
+                else:
+                    return selected
+            else:
+                raise ValueError(f"single 模式指定服务不存在或已禁用: {single_service_id}")
 
-        return base_query.order_by(EmailServiceModel.priority.asc(), EmailServiceModel.id.asc()).first()
+        candidates = base_query.order_by(EmailServiceModel.priority.asc(), EmailServiceModel.id.asc()).all()
+        for item in candidates:
+            if not _is_pop3_alias_provider(_extract_tempmail_provider(item)):
+                return item
+        return None
 
     # multi 模式按 last_used + priority 轮询
-    return base_query.order_by(
+    candidates = base_query.order_by(
         EmailServiceModel.last_used.is_(None).desc(),
         EmailServiceModel.last_used.asc(),
         EmailServiceModel.priority.asc(),
         EmailServiceModel.id.asc(),
-    ).first()
+    ).all()
+    for item in candidates:
+        if not _is_pop3_alias_provider(_extract_tempmail_provider(item)):
+            return item
+    return None
 
 
 def _select_and_mark_tempmail_service(db, settings, explicit_service_id: Optional[int]):
@@ -396,7 +388,7 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
             # 更新任务的代理记录
             crud.update_registration_task(db, task_uuid, proxy=actual_proxy_url)
 
-            # 创建邮箱服务（支持临时邮箱池 + 普通邮箱 POP3）
+            # 创建邮箱服务（仅临时邮箱规则）
             service_type = EmailServiceType(email_service_type)
             settings = get_settings()
             selected_is_global_tempmail = False
@@ -409,6 +401,8 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
 
                 selected_config = dict(cast(dict, selected_service.config or {}))
                 provider = str(selected_service.provider or selected_config.get("provider") or "tempmail_lol")
+                if _is_pop3_alias_provider(provider):
+                    raise ValueError("POP 注册方式已下线，请改用临时邮箱规则（Tempmail.lol/GuerrillaMail）")
                 selected_config["provider"] = provider
                 selected_is_global_tempmail = is_global_tempmail_service(selected_service)
                 config = _normalize_email_service_config(service_type, selected_config, actual_proxy_url)
@@ -421,18 +415,8 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                     provider_meta.get("label") or provider,
                     selected_service.priority,
                 )
-            elif service_type == EmailServiceType.POP3:
-                raw_config = dict(cast(dict, email_service_config or {}))
-                config = _normalize_email_service_config(service_type, raw_config, actual_proxy_url)
-                _validate_pop3_registration_config(config)
-                logger.info(
-                    "使用 POP3 普通邮箱接收验证码: %s@%s:%s",
-                    config.get("username"),
-                    config.get("host"),
-                    config.get("port"),
-                )
             else:
-                raise ValueError(f"当前不支持该邮箱服务类型: {service_type.value}")
+                raise ValueError("当前仅支持临时邮箱规则注册")
 
             email_service = EmailServiceFactory.create(service_type, config)
 
@@ -1480,7 +1464,7 @@ async def start_registration(
     """
     启动注册任务
 
-    - email_service_type: 邮箱服务类型（支持 tempmail / pop3）
+    - email_service_type: 邮箱服务类型（仅支持 tempmail）
     - proxy: 代理地址
     - email_service_config: 邮箱服务配置
     """
@@ -1492,6 +1476,9 @@ async def start_registration(
             status_code=400,
             detail=f"无效的邮箱服务类型: {request.email_service_type}"
         )
+
+    if request.email_service_type != EmailServiceType.TEMPMAIL.value:
+        raise HTTPException(status_code=400, detail="POP 注册方式已下线，请改用临时邮箱规则")
 
     # 创建任务
     task_uuid = str(uuid.uuid4())
@@ -1562,6 +1549,9 @@ async def start_batch_registration(
             status_code=400,
             detail=f"无效的邮箱服务类型: {request.email_service_type}"
         )
+
+    if request.email_service_type != EmailServiceType.TEMPMAIL.value:
+        raise HTTPException(status_code=400, detail="POP 注册方式已下线，请改用临时邮箱规则")
 
     if request.interval_min < 0 or request.interval_max < request.interval_min:
         raise HTTPException(status_code=400, detail="间隔时间参数无效")
@@ -1931,8 +1921,7 @@ async def get_available_email_services():
     """
     获取可用于注册的邮箱服务列表（仅邮箱规则池）。
 
-    说明：普通邮箱请在邮箱规则中配置 `pop3_alias` provider，
-    注册页不再暴露手填 POP3 模式。
+    说明：注册页仅支持临时邮箱规则，POP 注册方式已下线。
     """
     from ...database.models import EmailService as EmailServiceModel
     settings = get_settings()
@@ -1961,17 +1950,13 @@ async def get_available_email_services():
 
             config = service.config or {}
             provider = str(service.provider or config.get("provider") or "tempmail_lol")
+            if _is_pop3_alias_provider(provider):
+                continue
             provider_meta = get_tempmail_provider_meta(provider)
-            if provider == "pop3_alias":
-                description = (
-                    f"{provider_meta.get('label') or provider} / "
-                    f"主邮箱: {config.get('base_email') or '-'}"
-                )
-            else:
-                description = (
-                    f"{provider_meta.get('label') or provider} / "
-                    f"前缀: {config.get('address_prefix') or '-'}"
-                )
+            description = (
+                f"{provider_meta.get('label') or provider} / "
+                f"前缀: {config.get('address_prefix') or '-'}"
+            )
             services.append({
                 "id": service.id,
                 "name": service.name,

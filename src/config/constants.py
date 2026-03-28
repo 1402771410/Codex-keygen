@@ -149,8 +149,8 @@ TEMPMAIL_PROVIDER_CATALOG: Dict[str, Dict[str, Any]] = {
         "default_base_url": "https://api.guerrillamail.com/ajax.php",
     },
     "pop3_alias": {
-        "label": "普通邮箱 POP3+Alias",
-        "description": "主邮箱 + 随机别名（local+random@domain），通过 POP3 收取验证码",
+        "label": "普通邮箱 POP3+Alias（已下线）",
+        "description": "该 provider 已下线，不再用于注册流程",
         "call_style": "pop3_alias",
         "default_base_url": "",
     },

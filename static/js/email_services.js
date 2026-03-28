@@ -49,7 +49,7 @@ const elements = {
 
 const fallbackProviders = [
     { value: 'tempmail_lol', label: 'Tempmail.lol', description: 'Token inbox 接口' },
-    { value: 'pop3_alias', label: '普通邮箱 POP3+Alias', description: '主邮箱+随机别名，POP3 收验证码' },
+    { value: 'guerrillamail', label: 'GuerrillaMail', description: 'Session Query 接口（f=get_email_address/get_email_list/fetch_email）' },
 ];
 
 let tempmailRules = [];

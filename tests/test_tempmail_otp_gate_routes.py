@@ -2,7 +2,7 @@ import asyncio
 from dataclasses import dataclass
 
 import pytest
-from fastapi import HTTPException
+from fastapi import BackgroundTasks, HTTPException
 
 from src.config import settings as settings_module
 from src.database import session as session_module
@@ -36,20 +36,23 @@ def _create_tempmail_service(
     db,
     name: str,
     *,
+    provider: str = "mail_tm",
+    config: dict | None = None,
     enabled: bool = True,
     last_test_status: str | None = None,
     last_test_message: str | None = None,
 ) -> EmailService:
+    normalized_config = config or {
+        "provider": provider,
+        "base_url": "https://api.mail.tm",
+        "timeout": 30,
+        "max_retries": 3,
+    }
     service = EmailService(
         service_type=EmailServiceType.TEMPMAIL.value,
-        provider="mail_tm",
+        provider=provider,
         name=name,
-        config={
-            "provider": "mail_tm",
-            "base_url": "https://api.mail.tm",
-            "timeout": 30,
-            "max_retries": 3,
-        },
+        config=normalized_config,
         enabled=enabled,
         priority=10,
         is_builtin=False,
@@ -123,6 +126,89 @@ def test_available_services_only_include_real_otp_passed(tmp_path, monkeypatch):
         assert payload["selection"]["single_service_id"] == passed_id
     finally:
         _reset_singletons()
+
+
+def test_available_services_excludes_pop3_alias_rules(tmp_path, monkeypatch):
+    _init_test_db(tmp_path, monkeypatch, "available_services_no_pop3_alias.db")
+
+    try:
+        with get_db() as db:
+            ensure_builtin_tempmail_services(db, settings_module.get_settings())
+
+            _create_tempmail_service(
+                db,
+                "Legacy POP3 Alias",
+                provider="pop3_alias",
+                config={
+                    "provider": "pop3_alias",
+                    "base_email": "123456@225.com",
+                    "pop3_host": "pop.225.com",
+                    "pop3_port": 995,
+                    "pop3_username": "123456@225.com",
+                    "pop3_password": "secret",
+                    "timeout": 30,
+                },
+                last_test_status="success",
+                last_test_message="[otp_received] 已确认收到真实 OpenAI OTP",
+            )
+            allowed = _create_tempmail_service(
+                db,
+                "GuerrillaMail Rule",
+                provider="guerrillamail",
+                config={
+                    "provider": "guerrillamail",
+                    "base_url": "https://api.guerrillamail.com/ajax.php",
+                    "timeout": 30,
+                    "max_retries": 3,
+                },
+                last_test_status="success",
+                last_test_message="[otp_received] 已确认收到真实 OpenAI OTP",
+            )
+
+            update_tempmail_runtime_state(
+                db,
+                settings_module.get_settings(),
+                selection_mode="single",
+                single_service_id=allowed.id,
+            )
+
+        payload = asyncio.run(registration_routes.get_available_email_services())
+        providers = {item["provider"] for item in payload["tempmail"]["services"]}
+
+        assert "pop3_alias" not in providers
+        assert "guerrillamail" in providers
+    finally:
+        _reset_singletons()
+
+
+def test_start_registration_rejects_legacy_pop3_type():
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(
+            registration_routes.start_registration(
+                registration_routes.RegistrationTaskCreate(email_service_type="pop3"),
+                BackgroundTasks(),
+            )
+        )
+
+    assert error.value.status_code == 400
+    assert "POP 注册方式已下线" in error.value.detail
+
+
+def test_start_batch_registration_rejects_legacy_pop3_type():
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(
+            registration_routes.start_batch_registration(
+                registration_routes.BatchRegistrationRequest(
+                    email_service_type="pop3",
+                    count=1,
+                    registration_mode="batch",
+                ),
+                BackgroundTasks(),
+            )
+        )
+
+    assert error.value.status_code == 400
+    assert "POP 注册方式已下线" in error.value.detail
 
 
 def test_email_service_test_route_records_probe_success_stage(tmp_path, monkeypatch):

@@ -12,7 +12,7 @@ from ..config.constants import (
 
 TEMPMAIL_PUBLIC_PROVIDER_OPTIONS = (
     "tempmail_lol",
-    "pop3_alias",
+    "guerrillamail",
 )
 
 _HTTP_PROVIDER_TEXT_FIELDS = (
