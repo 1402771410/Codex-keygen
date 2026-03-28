@@ -4,7 +4,7 @@
 
 import logging
 import os
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -23,6 +23,27 @@ from ...services.tempmail_catalog import build_tempmail_config
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+_OFFLINE_POP_PROVIDERS = {
+    "pop3",
+    "pop3_alias",
+    "pop3_plus",
+    "pop3plus",
+    "plus_alias",
+}
+
+
+def _normalize_provider_marker(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "")
+
+
+def _is_offline_pop_provider(value: Any) -> bool:
+    return _normalize_provider_marker(value) in _OFFLINE_POP_PROVIDERS
+
+
+def _service_is_offline_pop(service: EmailServiceModel) -> bool:
+    config = dict(service.config or {})
+    candidates = [service.provider, config.get("provider"), config.get("type")]
+    return any(_is_offline_pop_provider(candidate) for candidate in candidates)
 
 
 # ============== Pydantic Models ==============
@@ -476,6 +497,8 @@ async def update_tempmail_settings(request: TempmailSettings):
             ).first()
             if not service:
                 raise HTTPException(status_code=400, detail="single_service_id 对应服务不存在或未启用")
+            if _service_is_offline_pop(service):
+                raise HTTPException(status_code=400, detail="POP 规则已下线，single_service_id 不能指向该服务")
 
         global_service = get_global_tempmail_service(db, current_settings, ensure_exists=True)
         if global_service is None:

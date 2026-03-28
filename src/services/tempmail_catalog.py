@@ -175,4 +175,18 @@ def build_tempmail_builtin_specs(settings: Any) -> List[Dict[str, Any]]:
                 settings,
             ),
         },
+        {
+            "builtin_key": "builtin_guerrillamail",
+            "name": "GuerrillaMail 默认规则",
+            "provider": "guerrillamail",
+            "enabled": False,
+            "priority": 5,
+            "is_builtin": True,
+            "is_immutable": False,
+            "config": build_tempmail_config(
+                {"provider": "guerrillamail", "base_url": "https://api.guerrillamail.com/ajax.php"},
+                settings,
+                provider_hint="guerrillamail",
+            ),
+        },
     ]

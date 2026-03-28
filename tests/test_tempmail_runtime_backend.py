@@ -73,6 +73,31 @@ def test_sqlite_migration_adds_tempmail_runtime_columns(tmp_path):
     }.issubset(columns)
 
 
+def test_builtin_specs_include_guerrillamail_rule(tmp_path, monkeypatch):
+    db_path = tmp_path / "builtin_guerrillamail_rule.db"
+    db_url = f"sqlite:///{db_path.as_posix()}"
+
+    monkeypatch.setenv("APP_DATABASE_URL", db_url)
+    _reset_singletons()
+    initialize_database(db_url)
+
+    try:
+        settings = get_settings()
+
+        with get_db() as db:
+            ensure_builtin_tempmail_services(db, settings)
+            services = db.query(EmailService).filter(EmailService.service_type == EmailServiceType.TEMPMAIL.value).all()
+
+            builtin_keys = {str(item.builtin_key or "") for item in services}
+            providers = {str(item.provider or "") for item in services}
+
+            assert "global_tempmail" in builtin_keys
+            assert "builtin_guerrillamail" in builtin_keys
+            assert "guerrillamail" in providers
+    finally:
+        _reset_singletons()
+
+
 def test_routes_use_service_runtime_state_instead_of_global_settings(tmp_path, monkeypatch):
     db_path = tmp_path / "route_contract.db"
     db_url = f"sqlite:///{db_path.as_posix()}"
@@ -222,5 +247,48 @@ def test_select_tempmail_service_skips_offline_pop3_alias(tmp_path, monkeypatch)
             selected = registration_routes._select_tempmail_service(db, settings, None)
             assert selected is not None
             assert selected.provider != "pop3_alias"
+    finally:
+        _reset_singletons()
+
+
+def test_email_service_list_purges_legacy_pop_rule_and_keeps_guerrilla(tmp_path, monkeypatch):
+    db_path = tmp_path / "route_email_list_cleanup.db"
+    db_url = f"sqlite:///{db_path.as_posix()}"
+
+    monkeypatch.setenv("APP_DATABASE_URL", db_url)
+    _reset_singletons()
+    initialize_database(db_url)
+
+    try:
+        settings = get_settings()
+
+        with get_db() as db:
+            ensure_builtin_tempmail_services(db, settings)
+            pop_rule = EmailService(
+                service_type=EmailServiceType.TEMPMAIL.value,
+                provider="pop3_alias",
+                name="Legacy POP3 Alias",
+                config={
+                    "provider": "pop3_alias",
+                    "base_email": "123456@225.com",
+                    "pop3_host": "pop.225.com",
+                    "pop3_port": 995,
+                    "pop3_username": "123456@225.com",
+                    "pop3_password": "secret",
+                    "timeout": 30,
+                },
+                enabled=True,
+                priority=99,
+                is_builtin=False,
+                is_immutable=False,
+            )
+            db.add(pop_rule)
+            db.commit()
+
+        payload = asyncio.run(email_routes.list_email_services(service_type="tempmail", enabled_only=False))
+        providers = {item.provider for item in payload.services}
+
+        assert "pop3_alias" not in providers
+        assert "guerrillamail" in providers
     finally:
         _reset_singletons()

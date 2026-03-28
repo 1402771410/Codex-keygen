@@ -26,6 +26,29 @@ from ...services.tempmail_catalog import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+_OFFLINE_POP_PROVIDERS = {
+    "pop3",
+    "pop3_alias",
+    "pop3_plus",
+    "pop3plus",
+    "plus_alias",
+}
+
+
+def _normalize_provider_marker(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "")
+
+
+def _is_offline_pop_provider(value: Any) -> bool:
+    return _normalize_provider_marker(value) in _OFFLINE_POP_PROVIDERS
+
+
+def _service_is_offline_pop(service: EmailServiceModel) -> bool:
+    config = dict(service.config or {})
+    return any(
+        _is_offline_pop_provider(candidate)
+        for candidate in [service.provider, config.get("provider"), config.get("type")]
+    )
 
 
 def _normalize_tempmail_config(raw: Optional[Dict[str, Any]], provider_hint: Optional[str] = None) -> Dict[str, Any]:
@@ -42,6 +65,23 @@ def _ensure_tempmail_type(service_type: str) -> None:
 def _ensure_builtin_seeded(db) -> None:
     settings = get_settings()
     ensure_builtin_tempmail_services(db, settings)
+
+    stale_services = db.query(EmailServiceModel).filter(
+        EmailServiceModel.service_type == EmailServiceType.TEMPMAIL.value
+    ).all()
+    removed_ids: List[int] = []
+    for stale in stale_services:
+        if not _service_is_offline_pop(stale):
+            continue
+        removed_ids.append(int(stale.id))
+        db.delete(stale)
+
+    if removed_ids:
+        db.commit()
+        runtime_state = get_tempmail_runtime_state(db, settings)
+        if runtime_state.get("single_service_id") in set(removed_ids):
+            update_tempmail_runtime_state(db, settings, single_service_id=None)
+        logger.warning("已清理下线 POP 规则: %s", removed_ids)
 
 
 def _compose_stage_message(stage: str, message: str) -> str:
@@ -230,28 +270,9 @@ async def get_service_types():
                     {"name": "api_key", "label": "API Key（如供应商需要）", "required": False, "placeholder": "可选"},
                     {"name": "timeout", "label": "超时时间（秒）", "required": False, "default": 30},
                     {"name": "max_retries", "label": "最大重试次数", "required": False, "default": 3},
-                    {"name": "base_email", "label": "主邮箱地址（POP3 Alias）", "required": False, "placeholder": "例如：123456@225.com"},
-                    {"name": "pop3_host", "label": "POP3 服务器", "required": False, "placeholder": "例如：pop.225.com"},
-                    {"name": "pop3_port", "label": "POP3 端口", "required": False, "default": 995},
-                    {"name": "pop3_username", "label": "POP3 用户名", "required": False, "placeholder": "通常为邮箱账号"},
-                    {"name": "pop3_password", "label": "POP3 密码/授权码", "required": False, "placeholder": "必填"},
-                    {"name": "use_ssl", "label": "POP3 使用 SSL", "required": False, "default": True},
-                    {"name": "alias_length", "label": "随机后缀长度", "required": False, "default": 8},
-                    {
-                        "name": "alias_charset",
-                        "label": "随机后缀字符集",
-                        "required": False,
-                        "default": "loweralnum",
-                        "options": [
-                            {"value": "loweralnum", "label": "小写字母 + 数字"},
-                            {"value": "digits", "label": "仅数字"},
-                            {"value": "lower", "label": "仅小写字母"},
-                            {"value": "mixedalnum", "label": "大小写字母 + 数字"},
-                        ],
-                    },
-                    {"name": "poll_interval", "label": "轮询间隔（秒）", "required": False, "default": 5},
-                    {"name": "sender_keyword", "label": "发件人关键词", "required": False, "placeholder": "可选"},
-                    {"name": "subject_keyword", "label": "主题关键词", "required": False, "placeholder": "可选"},
+                    {"name": "request_ip", "label": "请求 IP（GuerrillaMail）", "required": False, "placeholder": "默认 127.0.0.1"},
+                    {"name": "agent", "label": "请求 UA（GuerrillaMail）", "required": False, "placeholder": "默认 Codex-keygen"},
+                    {"name": "lang", "label": "语言（GuerrillaMail，可选）", "required": False, "placeholder": "例如：en"},
                 ],
             }
         ]
@@ -274,7 +295,11 @@ async def list_email_services(
         if enabled_only:
             query = query.filter(EmailServiceModel.enabled == True)
 
-        services = query.order_by(EmailServiceModel.priority.asc(), EmailServiceModel.id.asc()).all()
+        services = [
+            item
+            for item in query.order_by(EmailServiceModel.priority.asc(), EmailServiceModel.id.asc()).all()
+            if not _service_is_offline_pop(item)
+        ]
         return EmailServiceListResponse(total=len(services), services=[_service_to_response(item) for item in services])
 
 
@@ -284,7 +309,7 @@ async def get_email_service(service_id: int):
     with get_db() as db:
         _ensure_builtin_seeded(db)
         service = db.query(EmailServiceModel).filter(EmailServiceModel.id == service_id).first()
-        if not service:
+        if not service or _service_is_offline_pop(service):
             raise HTTPException(status_code=404, detail="服务不存在")
         _ensure_tempmail_type(service.service_type)
         return _service_to_response(service)
@@ -296,7 +321,7 @@ async def get_email_service_full(service_id: int):
     with get_db() as db:
         _ensure_builtin_seeded(db)
         service = db.query(EmailServiceModel).filter(EmailServiceModel.id == service_id).first()
-        if not service:
+        if not service or _service_is_offline_pop(service):
             raise HTTPException(status_code=404, detail="服务不存在")
         _ensure_tempmail_type(service.service_type)
 
@@ -308,7 +333,10 @@ async def get_email_service_full(service_id: int):
 async def create_email_service(request: EmailServiceCreate):
     """创建临时邮箱服务。"""
     _ensure_tempmail_type(request.service_type)
-    provider = normalize_tempmail_provider(request.provider or request.config.get("provider"))
+    requested_provider = request.provider or request.config.get("provider")
+    if _is_offline_pop_provider(requested_provider):
+        raise HTTPException(status_code=400, detail="POP 邮箱方式已下线，请使用临时邮箱供应商")
+    provider = normalize_tempmail_provider(requested_provider)
 
     with get_db() as db:
         _ensure_builtin_seeded(db)
@@ -353,7 +381,7 @@ async def update_email_service(service_id: int, request: EmailServiceUpdate):
         _ensure_builtin_seeded(db)
 
         service = db.query(EmailServiceModel).filter(EmailServiceModel.id == service_id).first()
-        if not service:
+        if not service or _service_is_offline_pop(service):
             raise HTTPException(status_code=404, detail="服务不存在")
         _ensure_tempmail_type(service.service_type)
         _guard_immutable_update(service, request)
@@ -372,6 +400,8 @@ async def update_email_service(service_id: int, request: EmailServiceUpdate):
             incoming = dict(request.config)
             # provider 由创建阶段决定，避免误改调用方式
             incoming.pop("provider", None)
+            if _is_offline_pop_provider(incoming.get("type")):
+                raise HTTPException(status_code=400, detail="POP 邮箱方式已下线，请使用临时邮箱供应商")
             merged.update(incoming)
             service.config = _normalize_tempmail_config(merged, provider_hint=service.provider)
 
@@ -403,7 +433,7 @@ async def delete_email_service(service_id: int):
         _ensure_builtin_seeded(db)
 
         service = db.query(EmailServiceModel).filter(EmailServiceModel.id == service_id).first()
-        if not service:
+        if not service or _service_is_offline_pop(service):
             raise HTTPException(status_code=404, detail="服务不存在")
         _ensure_tempmail_type(service.service_type)
 
@@ -430,7 +460,7 @@ async def test_email_service(service_id: int):
         _ensure_builtin_seeded(db)
 
         service = db.query(EmailServiceModel).filter(EmailServiceModel.id == service_id).first()
-        if not service:
+        if not service or _service_is_offline_pop(service):
             raise HTTPException(status_code=404, detail="服务不存在")
         _ensure_tempmail_type(service.service_type)
 
@@ -483,7 +513,7 @@ async def enable_email_service(service_id: int):
         _ensure_builtin_seeded(db)
 
         service = db.query(EmailServiceModel).filter(EmailServiceModel.id == service_id).first()
-        if not service:
+        if not service or _service_is_offline_pop(service):
             raise HTTPException(status_code=404, detail="服务不存在")
         _ensure_tempmail_type(service.service_type)
         _ensure_service_can_enable(service)
@@ -506,7 +536,7 @@ async def disable_email_service(service_id: int):
         _ensure_builtin_seeded(db)
 
         service = db.query(EmailServiceModel).filter(EmailServiceModel.id == service_id).first()
-        if not service:
+        if not service or _service_is_offline_pop(service):
             raise HTTPException(status_code=404, detail="服务不存在")
         _ensure_tempmail_type(service.service_type)
 

@@ -311,13 +311,13 @@ def _select_tempmail_service(db, settings, explicit_service_id: Optional[int]):
                 else:
                     return selected
             else:
-                raise ValueError(f"single 模式指定服务不存在或已禁用: {single_service_id}")
+                logger.warning("single 模式指定服务不存在或已禁用(ID=%s)，自动回退到临时邮箱规则", single_service_id)
 
         candidates = base_query.order_by(EmailServiceModel.priority.asc(), EmailServiceModel.id.asc()).all()
         for item in candidates:
             if not _is_pop3_alias_provider(_extract_tempmail_provider(item)):
                 return item
-        return None
+        raise ValueError("没有可用的启用临时邮箱服务")
 
     # multi 模式按 last_used + priority 轮询
     candidates = base_query.order_by(
@@ -329,7 +329,7 @@ def _select_tempmail_service(db, settings, explicit_service_id: Optional[int]):
     for item in candidates:
         if not _is_pop3_alias_provider(_extract_tempmail_provider(item)):
             return item
-    return None
+    raise ValueError("没有可用的启用临时邮箱服务")
 
 
 def _select_and_mark_tempmail_service(db, settings, explicit_service_id: Optional[int]):

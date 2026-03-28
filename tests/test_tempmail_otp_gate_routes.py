@@ -181,6 +181,41 @@ def test_available_services_excludes_pop3_alias_rules(tmp_path, monkeypatch):
         _reset_singletons()
 
 
+def test_email_service_types_expose_guerrillamail_provider():
+    payload = asyncio.run(email_routes.get_service_types())
+    providers = payload["types"][0]["providers"]
+    values = {item["value"] for item in providers}
+
+    assert "guerrillamail" in values
+    assert "pop3_alias" not in values
+
+
+def test_create_email_service_rejects_pop3_alias_provider(tmp_path, monkeypatch):
+    _init_test_db(tmp_path, monkeypatch, "email_service_reject_pop_provider.db")
+
+    try:
+        with pytest.raises(HTTPException) as error:
+            asyncio.run(
+                email_routes.create_email_service(
+                    email_routes.EmailServiceCreate(
+                        service_type=EmailServiceType.TEMPMAIL.value,
+                        provider="pop3_alias",
+                        name="legacy-pop-provider",
+                        enabled=False,
+                        config={
+                            "provider": "pop3_alias",
+                            "base_email": "123456@225.com",
+                        },
+                    )
+                )
+            )
+
+        assert error.value.status_code == 400
+        assert "POP 邮箱方式已下线" in error.value.detail
+    finally:
+        _reset_singletons()
+
+
 def test_start_registration_rejects_legacy_pop3_type():
     with pytest.raises(HTTPException) as error:
         asyncio.run(

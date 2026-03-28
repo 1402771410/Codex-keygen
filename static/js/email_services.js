@@ -23,18 +23,6 @@ const elements = {
     ruleBaseUrl: document.getElementById('rule-base-url'),
     ruleAddressPrefix: document.getElementById('rule-address-prefix'),
     rulePreferredDomain: document.getElementById('rule-preferred-domain'),
-    rulePop3Config: document.getElementById('rule-pop3-config'),
-    ruleBaseEmail: document.getElementById('rule-base-email'),
-    ruleAliasLength: document.getElementById('rule-alias-length'),
-    ruleAliasCharset: document.getElementById('rule-alias-charset'),
-    rulePop3Host: document.getElementById('rule-pop3-host'),
-    rulePop3Port: document.getElementById('rule-pop3-port'),
-    rulePop3Username: document.getElementById('rule-pop3-username'),
-    rulePop3Password: document.getElementById('rule-pop3-password'),
-    rulePop3UseSsl: document.getElementById('rule-pop3-use-ssl'),
-    rulePop3PollInterval: document.getElementById('rule-pop3-poll-interval'),
-    ruleSubjectKeyword: document.getElementById('rule-subject-keyword'),
-    ruleSenderKeyword: document.getElementById('rule-sender-keyword'),
     ruleTimeout: document.getElementById('rule-timeout'),
     ruleMaxRetriesGroup: document.getElementById('rule-max-retries-group'),
     ruleMaxRetries: document.getElementById('rule-max-retries'),
@@ -77,53 +65,25 @@ const TEST_STAGE_HINTS = {
 let testStageAutoTimer = null;
 let testStageAutoIndex = 0;
 
-function isPop3AliasProvider(provider) {
-    return String(provider || '').trim().toLowerCase() === 'pop3_alias';
-}
-
 function syncProviderSpecificFields(provider) {
-    const isPop3Alias = isPop3AliasProvider(provider);
-
     if (elements.ruleHttpConfig) {
-        elements.ruleHttpConfig.style.display = isPop3Alias ? 'none' : 'block';
+        elements.ruleHttpConfig.style.display = 'block';
     }
     if (elements.ruleMaxRetriesGroup) {
-        elements.ruleMaxRetriesGroup.style.display = isPop3Alias ? 'none' : 'block';
-    }
-    if (elements.rulePop3Config) {
-        elements.rulePop3Config.style.display = isPop3Alias ? 'block' : 'none';
+        elements.ruleMaxRetriesGroup.style.display = 'block';
     }
 
     if (elements.ruleBaseUrl) {
-        elements.ruleBaseUrl.disabled = isPop3Alias;
-        if (isPop3Alias) {
-            elements.ruleBaseUrl.value = '';
-        }
+        elements.ruleBaseUrl.disabled = false;
     }
     if (elements.ruleAddressPrefix) {
-        elements.ruleAddressPrefix.disabled = isPop3Alias;
-        if (isPop3Alias) {
-            elements.ruleAddressPrefix.value = '';
-        }
+        elements.ruleAddressPrefix.disabled = false;
     }
     if (elements.rulePreferredDomain) {
-        elements.rulePreferredDomain.disabled = isPop3Alias;
-        if (isPop3Alias) {
-            elements.rulePreferredDomain.value = '';
-        }
+        elements.rulePreferredDomain.disabled = false;
     }
     if (elements.ruleMaxRetries) {
-        elements.ruleMaxRetries.disabled = isPop3Alias;
-    }
-}
-
-function syncPop3SslPort() {
-    if (!elements.rulePop3UseSsl || !elements.rulePop3Port) {
-        return;
-    }
-    const port = Number(elements.rulePop3Port.value || 0);
-    if (!port || port === 995 || port === 110) {
-        elements.rulePop3Port.value = elements.rulePop3UseSsl.checked ? '995' : '110';
+        elements.ruleMaxRetries.disabled = false;
     }
 }
 
@@ -156,9 +116,6 @@ function bindEvents() {
         elements.ruleProvider.addEventListener('change', () => {
             syncProviderSpecificFields(elements.ruleProvider.value);
         });
-    }
-    if (elements.rulePop3UseSsl) {
-        elements.rulePop3UseSsl.addEventListener('change', syncPop3SslPort);
     }
 }
 
@@ -469,45 +426,17 @@ function renderTempmailRulesTable() {
         const providerLabel = item.provider_label || item.provider || 'Tempmail';
         const callStyle = item.provider_runtime_meta?.call_style || '';
         const summaryParts = [];
-        if (item.provider !== 'pop3_alias') {
-            if (config.base_url) {
-                summaryParts.push(`API: ${escapeHtml(config.base_url)}`);
-            }
-            if (config.address_prefix) {
-                summaryParts.push(`前缀: ${escapeHtml(config.address_prefix)}`);
-            }
-            if (config.preferred_domain) {
-                summaryParts.push(`域名: ${escapeHtml(config.preferred_domain)}`);
-            }
+        if (config.base_url) {
+            summaryParts.push(`API: ${escapeHtml(config.base_url)}`);
         }
-        if (item.provider === 'pop3_alias') {
-            if (config.base_email) {
-                summaryParts.push(`主邮箱: ${escapeHtml(config.base_email)}`);
-            }
-            if (config.pop3_host) {
-                const pop3Port = Number(config.pop3_port || 995);
-                summaryParts.push(`POP3: ${escapeHtml(config.pop3_host)}:${pop3Port}`);
-            }
-            if (config.alias_length) {
-                summaryParts.push(`别名长度: ${Number(config.alias_length)}`);
-            }
-            if (config.alias_charset) {
-                const charsetTextMap = {
-                    digits: '仅数字',
-                    lower: '仅小写字母',
-                    loweralnum: '小写+数字',
-                    mixedalnum: '大小写+数字',
-                };
-                const charsetLabel = charsetTextMap[String(config.alias_charset)] || String(config.alias_charset);
-                summaryParts.push(`字符集: ${escapeHtml(charsetLabel)}`);
-            }
-            summaryParts.push(`SSL: ${config.use_ssl === false ? '关闭' : '开启'}`);
-            summaryParts.push(`轮询: ${Number(config.poll_interval || 5)}s`);
+        if (config.address_prefix) {
+            summaryParts.push(`前缀: ${escapeHtml(config.address_prefix)}`);
+        }
+        if (config.preferred_domain) {
+            summaryParts.push(`域名: ${escapeHtml(config.preferred_domain)}`);
         }
         summaryParts.push(`超时: ${Number(config.timeout || 30)}s`);
-        if (item.provider !== 'pop3_alias') {
-            summaryParts.push(`重试: ${Number(config.max_retries || 3)}`);
-        }
+        summaryParts.push(`重试: ${Number(config.max_retries || 3)}`);
 
         const fixedTag = item.is_immutable ? '<span class="mailhub-fixed-tag">固定</span>' : '';
         const available = isRuleAvailable(item);
@@ -580,46 +509,9 @@ function openRuleModal(rule = null) {
         elements.ruleProvider.disabled = isEdit;
     }
 
-    const isPop3Alias = isPop3AliasProvider(provider);
-    elements.ruleBaseUrl.value = isPop3Alias ? '' : (config.base_url || '');
-    elements.ruleAddressPrefix.value = isPop3Alias ? '' : (config.address_prefix || '');
-    elements.rulePreferredDomain.value = isPop3Alias ? '' : (config.preferred_domain || '');
-    if (elements.ruleBaseEmail) {
-        elements.ruleBaseEmail.value = config.base_email || '';
-    }
-    if (elements.ruleAliasLength) {
-        elements.ruleAliasLength.value = String(config.alias_length || 8);
-    }
-    if (elements.ruleAliasCharset) {
-        elements.ruleAliasCharset.value = config.alias_charset || 'loweralnum';
-    }
-    if (elements.rulePop3Host) {
-        elements.rulePop3Host.value = config.pop3_host || '';
-    }
-    if (elements.rulePop3Port) {
-        elements.rulePop3Port.value = String(config.pop3_port || 995);
-    }
-    if (elements.rulePop3Username) {
-        elements.rulePop3Username.value = config.pop3_username || '';
-    }
-    if (elements.rulePop3Password) {
-        elements.rulePop3Password.value = config.pop3_password || '';
-    }
-    if (elements.rulePop3UseSsl) {
-        const useSslRaw = config.use_ssl;
-        elements.rulePop3UseSsl.checked = typeof useSslRaw === 'boolean'
-            ? useSslRaw
-            : String(useSslRaw || 'true').toLowerCase() !== 'false';
-    }
-    if (elements.rulePop3PollInterval) {
-        elements.rulePop3PollInterval.value = String(config.poll_interval || 5);
-    }
-    if (elements.ruleSubjectKeyword) {
-        elements.ruleSubjectKeyword.value = config.subject_keyword || '';
-    }
-    if (elements.ruleSenderKeyword) {
-        elements.ruleSenderKeyword.value = config.sender_keyword || '';
-    }
+    elements.ruleBaseUrl.value = config.base_url || '';
+    elements.ruleAddressPrefix.value = config.address_prefix || '';
+    elements.rulePreferredDomain.value = config.preferred_domain || '';
     elements.ruleTimeout.value = String(config.timeout || 30);
     elements.ruleMaxRetries.value = String(config.max_retries || 3);
 
@@ -650,7 +542,6 @@ async function handleSaveRule(event) {
     const timeout = Number(elements.ruleTimeout.value || 30);
     const maxRetries = Number(elements.ruleMaxRetries.value || 3);
     const enableRequested = Boolean(elements.ruleEnabled.checked);
-    const isPop3Alias = isPop3AliasProvider(provider);
 
     if (!name) {
         toast.error('规则名称不能为空');
@@ -674,60 +565,21 @@ async function handleSaveRule(event) {
         timeout: Number.isFinite(timeout) ? Math.max(5, timeout) : 30,
     };
 
-    if (isPop3Alias) {
-        const baseEmail = (elements.ruleBaseEmail?.value || '').trim();
-        const pop3Host = (elements.rulePop3Host?.value || '').trim();
-        const pop3Port = Number(elements.rulePop3Port?.value || 995);
-        const pop3Username = (elements.rulePop3Username?.value || '').trim();
-        const pop3Password = elements.rulePop3Password?.value || '';
-        const aliasLength = Number(elements.ruleAliasLength?.value || 8);
-        const aliasCharset = (elements.ruleAliasCharset?.value || 'loweralnum').trim();
-        const pollInterval = Number(elements.rulePop3PollInterval?.value || 5);
-        const useSsl = Boolean(elements.rulePop3UseSsl?.checked);
-        const subjectKeyword = (elements.ruleSubjectKeyword?.value || '').trim();
-        const senderKeyword = (elements.ruleSenderKeyword?.value || '').trim();
+    const normalizedMaxRetries = Number.isFinite(maxRetries) ? Math.max(1, maxRetries) : 3;
+    config.max_retries = normalizedMaxRetries;
 
-        if (!baseEmail || !pop3Host || !pop3Username || !pop3Password) {
-            toast.error('POP3 无限邮箱配置不完整，请填写主邮箱、服务器、用户名和密码');
-            return;
-        }
-        if (!Number.isInteger(pop3Port) || pop3Port < 1 || pop3Port > 65535) {
-            toast.error('POP3 端口无效，请填写 1-65535 之间的整数');
-            return;
-        }
+    const baseUrl = elements.ruleBaseUrl.value.trim();
+    const addressPrefix = elements.ruleAddressPrefix.value.trim();
+    const preferredDomain = elements.rulePreferredDomain.value.trim();
 
-        config.base_email = baseEmail;
-        config.pop3_host = pop3Host;
-        config.pop3_port = pop3Port;
-        config.pop3_username = pop3Username;
-        config.pop3_password = pop3Password;
-        config.use_ssl = useSsl;
-        config.alias_length = Number.isInteger(aliasLength) ? Math.max(4, aliasLength) : 8;
-        config.alias_charset = aliasCharset || 'loweralnum';
-        config.poll_interval = Number.isInteger(pollInterval) ? Math.max(2, pollInterval) : 5;
-        if (subjectKeyword) {
-            config.subject_keyword = subjectKeyword;
-        }
-        if (senderKeyword) {
-            config.sender_keyword = senderKeyword;
-        }
-    } else {
-        const normalizedMaxRetries = Number.isFinite(maxRetries) ? Math.max(1, maxRetries) : 3;
-        config.max_retries = normalizedMaxRetries;
-
-        const baseUrl = elements.ruleBaseUrl.value.trim();
-        const addressPrefix = elements.ruleAddressPrefix.value.trim();
-        const preferredDomain = elements.rulePreferredDomain.value.trim();
-
-        if (baseUrl) {
-            config.base_url = baseUrl;
-        }
-        if (addressPrefix) {
-            config.address_prefix = addressPrefix;
-        }
-        if (preferredDomain) {
-            config.preferred_domain = preferredDomain;
-        }
+    if (baseUrl) {
+        config.base_url = baseUrl;
+    }
+    if (addressPrefix) {
+        config.address_prefix = addressPrefix;
+    }
+    if (preferredDomain) {
+        config.preferred_domain = preferredDomain;
     }
 
     try {
