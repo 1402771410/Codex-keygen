@@ -19,6 +19,7 @@ class Sub2ApiServiceCreate(BaseModel):
     name: str
     api_url: str
     api_key: str
+    group_name: Optional[str] = None
     enabled: bool = True
     priority: int = 0
 
@@ -27,6 +28,7 @@ class Sub2ApiServiceUpdate(BaseModel):
     name: Optional[str] = None
     api_url: Optional[str] = None
     api_key: Optional[str] = None
+    group_name: Optional[str] = None
     enabled: Optional[bool] = None
     priority: Optional[int] = None
 
@@ -35,6 +37,7 @@ class Sub2ApiServiceResponse(BaseModel):
     id: int
     name: str
     api_url: str
+    group_name: Optional[str] = None
     has_key: bool
     enabled: bool
     priority: int
@@ -62,6 +65,7 @@ def _to_response(svc) -> Sub2ApiServiceResponse:
         id=svc.id,
         name=svc.name,
         api_url=svc.api_url,
+        group_name=svc.group_name,
         has_key=bool(svc.api_key),
         enabled=svc.enabled,
         priority=svc.priority,
@@ -89,6 +93,7 @@ async def create_sub2api_service(request: Sub2ApiServiceCreate):
             name=request.name,
             api_url=request.api_url,
             api_key=request.api_key,
+            group_name=(request.group_name or "").strip() or None,
             enabled=request.enabled,
             priority=request.priority,
         )
@@ -117,6 +122,7 @@ async def get_sub2api_service_full(service_id: int):
             "name": svc.name,
             "api_url": svc.api_url,
             "api_key": svc.api_key,
+            "group_name": svc.group_name,
             "enabled": svc.enabled,
             "priority": svc.priority,
         }
@@ -140,6 +146,8 @@ async def update_sub2api_service(service_id: int, request: Sub2ApiServiceUpdate)
             update_data["api_key"] = request.api_key
         if request.enabled is not None:
             update_data["enabled"] = request.enabled
+        if request.group_name is not None:
+            update_data["group_name"] = (request.group_name or "").strip() or None
         if request.priority is not None:
             update_data["priority"] = request.priority
 
@@ -196,6 +204,7 @@ async def upload_accounts_to_sub2api(request: Sub2ApiUploadRequest):
 
         api_url = svc.api_url
         api_key = svc.api_key
+        group_name = (svc.group_name or "").strip() or None
 
     results = batch_upload_to_sub2api(
         request.account_ids,
@@ -203,5 +212,6 @@ async def upload_accounts_to_sub2api(request: Sub2ApiUploadRequest):
         api_key,
         concurrency=request.concurrency,
         priority=request.priority,
+        group_name=group_name,
     )
     return results

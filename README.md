@@ -163,29 +163,42 @@ python webui.py
 
 在项目目录执行：
 
+```bat
+keygen.bat
+```
+
+在 Windows 上仅显示并打包 `windows` 目标（不会显示 macOS 选项）。
+`keygen.bat` 会直接调用 `--target windows`，无需再手动选择平台。
+
+macOS 一键脚本：
+
+```bash
+./keygen.command
+```
+
+在 macOS 上仅显示并打包 `macos` 目标。
+`keygen.command` 会直接调用 `--target macos`，无需再手动选择平台。
+若检测到缺少 Python 3，脚本会默认尝试自动安装（Homebrew + python）。
+可设置 `KEYGEN_AUTO_INSTALL=0` 关闭自动安装。
+
+如果你已安装 `keygen` 命令，也可以执行：
+
 ```bash
 keygen package --target interactive
 ```
 
-Windows CMD 可直接使用打包脚本：
-
-```bat
-package.bat
-```
-
-打包时会交互选择平台（`windows` / `macos`）。
-
 指定发布目录（会自动创建 `windows` 或 `macos` 子目录）：
 
 ```bat
-package.bat D:\build-output
+keygen.bat D:\build-output
 ```
 
-或：
-
-```bat
-keygen.bat package --target interactive --output-dir "D:\build-output"
+```bash
+./keygen.command ~/Desktop/codex-build
 ```
+
+打包结束后脚本会保留窗口，并显示发布目录与可执行文件路径。
+若用于自动化流水线，可设置 `KEYGEN_NO_PAUSE=1` 跳过结束停留。
 
 > 注意：Windows 包必须在 Windows 构建，macOS 包必须在 macOS 构建。
 
@@ -281,6 +294,7 @@ Codex-keygen/
 ├── webui.py
 ├── keygen
 ├── keygen.bat
+├── keygen.command
 ├── package.bat
 ├── scripts/
 │   ├── install_auto.sh

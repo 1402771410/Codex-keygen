@@ -121,6 +121,7 @@ class DatabaseSessionManager:
             ("email_services", "last_test_message", "TEXT"),
             ("email_services", "selection_mode", "VARCHAR(20)"),
             ("email_services", "single_service_id", "INTEGER"),
+            ("sub2api_services", "group_name", "VARCHAR(255)"),
         ]
 
         # 确保新表存在（create_tables 已处理，此处兜底）

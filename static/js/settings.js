@@ -1042,9 +1042,12 @@ function openSub2ApiServiceModal(svc = null) {
     if (svc) {
         document.getElementById('sub2api-service-name').value = svc.name || '';
         document.getElementById('sub2api-service-url').value = svc.api_url || '';
+        document.getElementById('sub2api-service-group-name').value = svc.group_name || '';
         document.getElementById('sub2api-service-priority').value = svc.priority ?? 0;
         document.getElementById('sub2api-service-enabled').checked = svc.enabled !== false;
         document.getElementById('sub2api-service-key').placeholder = svc.has_key ? '已配置，留空保持不变' : '请输入 API Key';
+    } else {
+        document.getElementById('sub2api-service-group-name').value = '';
     }
     elements.sub2ApiServiceEditModal.classList.add('active');
 }
@@ -1083,6 +1086,7 @@ async function handleSaveSub2ApiService(e) {
         name: document.getElementById('sub2api-service-name').value,
         api_url: document.getElementById('sub2api-service-url').value,
         api_key: document.getElementById('sub2api-service-key').value || undefined,
+        group_name: document.getElementById('sub2api-service-group-name').value.trim() || null,
         priority: parseInt(document.getElementById('sub2api-service-priority').value) || 0,
         enabled: document.getElementById('sub2api-service-enabled').checked,
     };

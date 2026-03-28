@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 跨平台一键打包工具（Windows / macOS）。
 
@@ -187,6 +188,19 @@ def pick_target(target_arg: str) -> str:
     if target_arg in {"windows", "macos"}:
         return target_arg
 
+    host = detect_os()
+    if host == "windows":
+        print("当前系统：Windows，仅支持打包 Windows")
+        print("1) Windows")
+        _ = input("按回车继续 [1]：").strip()
+        return "windows"
+
+    if host == "macos":
+        print("当前系统：macOS，仅支持打包 macOS")
+        print("1) macOS")
+        _ = input("按回车继续 [1]：").strip()
+        return "macos"
+
     print("请选择打包目标：")
     print("1) Windows")
     print("2) macOS")
@@ -240,6 +254,14 @@ def build_pyinstaller(target: str, clean: bool, dry_run: bool) -> Path:
         "--onefile",
         "--name",
         build_name,
+        "--hidden-import",
+        "uvicorn",
+        "--hidden-import",
+        "uvicorn.config",
+        "--hidden-import",
+        "uvicorn.main",
+        "--hidden-import",
+        "websockets",
     ]
     if clean:
         command.append("--clean")
@@ -259,7 +281,7 @@ def build_pyinstaller(target: str, clean: bool, dry_run: bool) -> Path:
     return DIST_DIR / executable_name
 
 
-def create_release(target: str, built_file: Path, dry_run: bool, release_root: Path) -> Path:
+def create_release(target: str, built_file: Path, dry_run: bool, release_root: Path) -> tuple[Path, Path]:
     release_dir = release_root / target
     final_name = "codex-keygen.exe" if target == "windows" else "codex-keygen"
     final_path = release_dir / final_name
@@ -267,7 +289,7 @@ def create_release(target: str, built_file: Path, dry_run: bool, release_root: P
     if dry_run:
         print(f"[Dry Run] 将创建发布目录：{release_dir}")
         print(f"[Dry Run] 将复制：{built_file} -> {final_path}")
-        return release_dir
+        return release_dir, final_path
 
     if release_dir.exists():
         shutil.rmtree(release_dir)
@@ -287,7 +309,16 @@ def create_release(target: str, built_file: Path, dry_run: bool, release_root: P
             "@echo off\n"
             "setlocal\n"
             "cd /d %~dp0\n"
-            "codex-keygen.exe\n",
+            "set LOG_FILE=startup-error.log\n"
+            "codex-keygen.exe 1>>startup.log 2>>%LOG_FILE%\n"
+            "set EXIT_CODE=%ERRORLEVEL%\n"
+            "if not \"%EXIT_CODE%\"==\"0\" (\n"
+            "  echo.\n"
+            "  echo [错误] codex-keygen.exe 启动失败，退出码 %EXIT_CODE%\n"
+            "  echo 请查看 %LOG_FILE% 获取详细错误。\n"
+            "  if not \"%KEYGEN_NO_PAUSE%\"==\"1\" pause\n"
+            ")\n"
+            "exit /b %EXIT_CODE%\n",
             encoding="utf-8",
         )
     else:
@@ -315,7 +346,7 @@ def create_release(target: str, built_file: Path, dry_run: bool, release_root: P
         encoding="utf-8",
     )
 
-    return release_dir
+    return release_dir, final_path
 
 
 def package(target_arg: str, clean: bool, dry_run: bool, output_dir: Optional[str] = None) -> None:
@@ -326,10 +357,16 @@ def package(target_arg: str, clean: bool, dry_run: bool, output_dir: Optional[st
     print(f"\n目标平台：{target}")
     print(f"发布根目录：{release_root}")
     built_file = build_pyinstaller(target=target, clean=clean, dry_run=dry_run)
-    release_dir = create_release(target=target, built_file=built_file, dry_run=dry_run, release_root=release_root)
+    release_dir, binary_path = create_release(
+        target=target,
+        built_file=built_file,
+        dry_run=dry_run,
+        release_root=release_root,
+    )
 
     print("\n打包完成。")
     print(f"发布目录：{release_dir}")
+    print(f"可执行文件：{binary_path}")
     if not dry_run:
         print("可直接运行，参数请编辑 runtime-config.json。")
 

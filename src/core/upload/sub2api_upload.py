@@ -22,6 +22,7 @@ def upload_to_sub2api(
     api_key: str,
     concurrency: int = 3,
     priority: int = 50,
+    group_name: Optional[str] = None,
 ) -> Tuple[bool, str]:
     """
     上传账号列表到 Sub2API 平台（不走代理）
@@ -87,6 +88,8 @@ def upload_to_sub2api(
     if not account_items:
         return False, "所有账号均缺少 access_token，无法上传"
 
+    normalized_group_name = (group_name or "").strip()
+
     payload = {
         "data": {
             "type": "sub2api-data",
@@ -97,6 +100,8 @@ def upload_to_sub2api(
         },
         "skip_default_group_bind": True,
     }
+    if normalized_group_name:
+        payload["group_name"] = normalized_group_name
 
     url = api_url.rstrip("/") + "/api/v1/admin/accounts/data"
     headers = {
@@ -118,6 +123,22 @@ def upload_to_sub2api(
         if response.status_code in (200, 201):
             return True, f"成功上传 {len(account_items)} 个账号"
 
+        if normalized_group_name and response.status_code == 400:
+            retry_payload = dict(payload)
+            retry_payload.pop("group_name", None)
+            retry_response = cffi_requests.post(
+                url,
+                json=retry_payload,
+                headers=headers,
+                proxies=None,
+                timeout=30,
+                impersonate="chrome110",
+            )
+            if retry_response.status_code in (200, 201):
+                return True, (
+                    f"成功上传 {len(account_items)} 个账号（当前 Sub2API 版本不支持分组字段，已忽略分组“{normalized_group_name}”）"
+                )
+
         error_msg = f"上传失败: HTTP {response.status_code}"
         try:
             detail = response.json()
@@ -138,6 +159,7 @@ def batch_upload_to_sub2api(
     api_key: str,
     concurrency: int = 3,
     priority: int = 50,
+    group_name: Optional[str] = None,
 ) -> dict:
     """
     批量上传指定 ID 的账号到 Sub2API 平台
@@ -169,7 +191,14 @@ def batch_upload_to_sub2api(
         if not accounts:
             return results
 
-        success, message = upload_to_sub2api(accounts, api_url, api_key, concurrency, priority)
+        success, message = upload_to_sub2api(
+            accounts,
+            api_url,
+            api_key,
+            concurrency,
+            priority,
+            group_name=group_name,
+        )
 
         if success:
             for acc in accounts:
