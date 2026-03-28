@@ -19,7 +19,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -202,6 +202,22 @@ def validate_host_support(target: str) -> None:
         raise PackageError("macOS 包需要在 macOS 系统执行打包命令")
 
 
+def resolve_release_root(output_dir_arg: Optional[str], interactive: bool) -> Path:
+    default_root = DIST_DIR / "releases"
+
+    selected = (output_dir_arg or "").strip()
+    if interactive and not selected:
+        selected = input("输入发布目录（默认 dist/releases）：").strip()
+
+    if not selected:
+        return default_root
+
+    candidate = Path(selected).expanduser()
+    if not candidate.is_absolute():
+        candidate = (ROOT_DIR / candidate).resolve()
+    return candidate
+
+
 def build_pyinstaller(target: str, clean: bool, dry_run: bool) -> Path:
     if dry_run:
         python_cmd = list(resolve_python())
@@ -243,8 +259,8 @@ def build_pyinstaller(target: str, clean: bool, dry_run: bool) -> Path:
     return DIST_DIR / executable_name
 
 
-def create_release(target: str, built_file: Path, dry_run: bool) -> Path:
-    release_dir = DIST_DIR / "releases" / target
+def create_release(target: str, built_file: Path, dry_run: bool, release_root: Path) -> Path:
+    release_dir = release_root / target
     final_name = "codex-keygen.exe" if target == "windows" else "codex-keygen"
     final_path = release_dir / final_name
 
@@ -302,13 +318,15 @@ def create_release(target: str, built_file: Path, dry_run: bool) -> Path:
     return release_dir
 
 
-def package(target_arg: str, clean: bool, dry_run: bool) -> None:
+def package(target_arg: str, clean: bool, dry_run: bool, output_dir: Optional[str] = None) -> None:
     target = pick_target(target_arg)
     validate_host_support(target)
+    release_root = resolve_release_root(output_dir_arg=output_dir, interactive=(target_arg == "interactive"))
 
     print(f"\n目标平台：{target}")
+    print(f"发布根目录：{release_root}")
     built_file = build_pyinstaller(target=target, clean=clean, dry_run=dry_run)
-    release_dir = create_release(target=target, built_file=built_file, dry_run=dry_run)
+    release_dir = create_release(target=target, built_file=built_file, dry_run=dry_run, release_root=release_root)
 
     print("\n打包完成。")
     print(f"发布目录：{release_dir}")
@@ -326,6 +344,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--no-clean", action="store_true", help="不清理历史 build 缓存")
     parser.add_argument("--dry-run", action="store_true", help="仅打印打包命令，不真正执行")
+    parser.add_argument(
+        "--output-dir",
+        default="",
+        help="发布输出根目录（默认 dist/releases；会自动追加 windows/macos 子目录）",
+    )
     return parser
 
 
@@ -335,7 +358,7 @@ def main() -> None:
     clean = not args.no_clean
 
     try:
-        package(target_arg=target_arg, clean=clean, dry_run=args.dry_run)
+        package(target_arg=target_arg, clean=clean, dry_run=args.dry_run, output_dir=args.output_dir)
     except PackageError as exc:
         print(f"[错误] {exc}")
         sys.exit(1)

@@ -100,6 +100,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     package_parser.add_argument("--no-clean", action="store_true", help="不清理历史 build 缓存")
     package_parser.add_argument("--dry-run", action="store_true", help="仅打印命令，不执行打包")
+    package_parser.add_argument(
+        "--output-dir",
+        default="",
+        help="发布输出根目录（默认 dist/releases；会自动追加 windows/macos 子目录）",
+    )
 
     subparsers.add_parser("config", help="打开配置面板")
     subparsers.add_parser("recommend", help="查看安装推荐")
@@ -170,7 +175,12 @@ def run_info() -> int:
 
 def run_package(args: argparse.Namespace) -> int:
     target = args.target
-    package_manager.package(target_arg=target, clean=not args.no_clean, dry_run=args.dry_run)
+    package_manager.package(
+        target_arg=target,
+        clean=not args.no_clean,
+        dry_run=args.dry_run,
+        output_dir=args.output_dir,
+    )
     return 0
 
 
