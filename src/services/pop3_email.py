@@ -6,6 +6,7 @@ import poplib
 import re
 import socket
 import time
+import logging
 from datetime import datetime
 from email import policy
 from email.parser import BytesParser
@@ -14,6 +15,9 @@ from typing import Any, Dict, List, Optional
 
 from .base import BaseEmailService, EmailServiceError, EmailServiceType
 from ..config.constants import OTP_CODE_PATTERN
+
+
+logger = logging.getLogger(__name__)
 
 
 def _to_bool(value: Any, default: bool = True) -> bool:
@@ -118,7 +122,7 @@ class Pop3EmailService(BaseEmailService):
                 messages = self._fetch_latest_messages()
                 purpose = str(self.config.get("otp_purpose") or "").strip().lower()
                 skew_tolerance = max(0, int(self.config.get("clock_skew_tolerance") or 120))
-                matched_codes: List[tuple[int, float, str]] = []
+                matched_codes: List[tuple[int, int, float, str]] = []
 
                 for message in messages:
                     if email and not self._message_targets_email(message, email):
@@ -132,8 +136,11 @@ class Pop3EmailService(BaseEmailService):
                         continue
 
                     timestamp = message.get("timestamp")
-                    if otp_sent_at and isinstance(timestamp, float) and timestamp < (otp_sent_at - skew_tolerance):
-                        continue
+                    message_is_stale = bool(
+                        otp_sent_at
+                        and isinstance(timestamp, float)
+                        and timestamp < (otp_sent_at - skew_tolerance)
+                    )
 
                     body = str(message.get("body") or "")
                     subject = str(message.get("subject") or "")
@@ -142,12 +149,16 @@ class Pop3EmailService(BaseEmailService):
                     if match:
                         code = match.group(1) if match.lastindex else match.group(0)
                         code_ts = timestamp if isinstance(timestamp, float) else 0.0
-                        matched_codes.append((purpose_score, code_ts, code))
+                        stale_rank = 0 if message_is_stale else 1
+                        matched_codes.append((stale_rank, purpose_score, code_ts, code))
 
                 if matched_codes:
-                    matched_codes.sort(key=lambda item: (item[0], item[1]), reverse=True)
+                    matched_codes.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
                     self.update_status(True)
-                    return matched_codes[0][2]
+                    best = matched_codes[0]
+                    if best[0] == 0 and otp_sent_at:
+                        logger.warning("检测到验证码邮件时间戳早于 otp_sent_at，已回退使用最新可匹配邮件")
+                    return best[3]
             except Exception as exc:
                 # 读取失败继续轮询，避免瞬时网络抖动直接终止。
                 self.update_status(False, exc)
@@ -288,14 +299,19 @@ class Pop3EmailService(BaseEmailService):
 
     def _message_targets_email(self, message: Dict[str, Any], target_email: str) -> bool:
         target_norm = self._normalize_email(target_email)
-        if not target_norm:
+        mailbox_norm = self._normalize_email(self.config.get("email"))
+        candidate_targets = [item for item in [target_norm, mailbox_norm] if item]
+        if not candidate_targets:
             return True
 
         recipients = self._extract_recipient_addresses(message)
         if not recipients:
-            return False
+            referenced = self._extract_text_email_addresses(message)
+            if not referenced:
+                return False
+            return any(ref in candidate_targets for ref in referenced)
 
-        return any(self._normalize_email(item) == target_norm for item in recipients)
+        return any(self._normalize_email(item) in candidate_targets for item in recipients)
 
     def _extract_recipient_addresses(self, message: Dict[str, Any]) -> List[str]:
         recipients: List[str] = []
@@ -332,6 +348,22 @@ class Pop3EmailService(BaseEmailService):
                     recipients.append(normalized)
 
         return recipients
+
+    def _extract_text_email_addresses(self, message: Dict[str, Any]) -> List[str]:
+        text_parts = [
+            str(message.get("subject") or ""),
+            str(message.get("body") or ""),
+            str(message.get("to") or ""),
+            str(message.get("delivered_to") or ""),
+            str(message.get("x_original_to") or ""),
+        ]
+        combined = "\n".join(text_parts)
+        candidates: List[str] = []
+        for found in self._EMAIL_PATTERN.findall(combined):
+            normalized = self._normalize_email(found)
+            if normalized and normalized not in candidates:
+                candidates.append(normalized)
+        return candidates
 
     @staticmethod
     def _normalize_email(value: Any) -> str:

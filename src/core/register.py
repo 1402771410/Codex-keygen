@@ -628,9 +628,13 @@ class RegistrationEngine:
             if isinstance(email_service_config, dict):
                 email_service_config["otp_purpose"] = effective_purpose
                 sender_keyword = str(email_service_config.get("sender_keyword") or "").strip()
+                subject_keyword = str(email_service_config.get("subject_keyword") or "").strip()
                 if effective_purpose == "login" and sender_keyword:
                     self._log("登录场景下已忽略固定发件人过滤，避免因发件人变化导致漏码", "warning")
                     email_service_config["sender_keyword"] = ""
+                if effective_purpose == "login" and subject_keyword:
+                    self._log("登录场景下已忽略固定主题过滤，避免因模板变化导致漏码", "warning")
+                    email_service_config["subject_keyword"] = ""
 
             email_id = self.email_info.get("service_id") if self.email_info else None
             code = self.email_service.get_verification_code(
@@ -820,6 +824,31 @@ class RegistrationEngine:
             self._log(f"触发无密 OTP 失败: {e}", "error")
             return False
 
+    def _resend_verification_code_from_otp_page(self) -> bool:
+        """在 OTP 页面上下文下重发验证码。"""
+        try:
+            if not self.session:
+                self._log("OTP 页面重发失败: 会话未初始化", "error")
+                return False
+
+            response = self.session.get(
+                OPENAI_API_ENDPOINTS["send_otp"],
+                headers={
+                    "referer": "https://auth.openai.com/email-verification",
+                    "accept": "application/json",
+                },
+            )
+
+            self._log(f"OTP 页面重发状态: {response.status_code}")
+            if response.status_code == 200:
+                self._otp_sent_at = time.time()
+                return True
+            return False
+
+        except Exception as e:
+            self._log(f"OTP 页面重发失败: {e}", "error")
+            return False
+
     def _run_second_oauth_login_after_create(self) -> Optional[str]:
         """Workspace 缺失时执行降级登录，刷新含 workspace 的授权 Cookie。"""
         self._log("13.1 Workspace 缺失，触发降级登录流程（新 OAuth + 新会话 + OTP）...")
@@ -855,8 +884,12 @@ class RegistrationEngine:
 
         if self._is_login_password_page_type(signup_result.page_type):
             self._log("降级登录: 进入 login_password 流程，直接触发无密 OTP")
-            fallback_resend_callback: Callable[[], bool] = self._send_passwordless_login_otp
-            fallback_send_before_first = True
+            if not self._send_passwordless_login_otp():
+                self._log("降级登录失败：无密 OTP 触发失败", "error")
+                return None
+            self._log("13.1 降级登录 OTP 发送状态: 已通过无密触发接口发送")
+            fallback_resend_callback: Callable[[], bool] = self._resend_verification_code_from_otp_page
+            fallback_send_before_first = False
         elif self._is_otp_page_type(signup_result.page_type) or signup_result.is_existing_account:
             self._log(
                 f"降级登录: 页面类型 {signup_result.page_type or 'unknown'}，按 OTP 验证流程继续",
@@ -864,7 +897,7 @@ class RegistrationEngine:
             )
             self._otp_sent_at = time.time()
             self._log("13.1 降级登录 OTP 发送状态: 已由页面自动触发")
-            fallback_resend_callback = self._send_passwordless_login_otp
+            fallback_resend_callback = self._resend_verification_code_from_otp_page
             fallback_send_before_first = False
         else:
             self._log(
@@ -1173,7 +1206,7 @@ class RegistrationEngine:
             stage = "wait_otp"
             self._log("探测 10/10: 等待验证码...")
             otp_purpose = "login" if self._is_existing_account else "create"
-            resend_callback = self._send_passwordless_login_otp if self._is_existing_account else self._send_verification_code
+            resend_callback = self._resend_verification_code_from_otp_page if self._is_existing_account else self._send_verification_code
             code = self._wait_verification_code_with_retry(
                 otp_purpose=otp_purpose,
                 stage_label="探测 10/10 验证码",
@@ -1304,7 +1337,7 @@ class RegistrationEngine:
             # 10. 获取验证码
             self._log("10. 等待验证码...")
             otp_purpose = "login" if self._is_existing_account else "create"
-            resend_callback = self._send_passwordless_login_otp if self._is_existing_account else self._send_verification_code
+            resend_callback = self._resend_verification_code_from_otp_page if self._is_existing_account else self._send_verification_code
             code = self._wait_verification_code_with_retry(
                 otp_purpose=otp_purpose,
                 stage_label="10. 验证码",

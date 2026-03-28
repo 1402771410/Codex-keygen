@@ -188,3 +188,87 @@ def test_pop3_get_verification_code_filters_recipient_and_otp_purpose(monkeypatc
     service.config["otp_purpose"] = "create"
     code = service.get_verification_code(email="user@example.com", timeout=30)
     assert code == "222222"
+
+
+def test_pop3_get_verification_code_accepts_body_recipient_when_headers_missing(monkeypatch):
+    service = Pop3EmailService(
+        {
+            "email": "user@example.com",
+            "host": "pop.example.com",
+            "port": 995,
+            "username": "user@example.com",
+            "password": "secret",
+            "use_ssl": True,
+            "poll_interval": 2,
+            "timeout": 30,
+            "otp_purpose": "login",
+        }
+    )
+
+    service.create_email()
+
+    monkeypatch.setattr(
+        service,
+        "_fetch_latest_messages",
+        lambda: [
+            {
+                "subject": "OpenAI verification",
+                "from": "notify-random@openai-mail.example",
+                "to": "",
+                "delivered_to": "",
+                "x_original_to": "",
+                "envelope_to": "",
+                "cc": "",
+                "resent_to": "",
+                "resent_cc": "",
+                "body": "If you were not trying to log in to OpenAI. Recipient: user@example.com, code 456789",
+                "timestamp": time.time(),
+            }
+        ],
+    )
+
+    code = service.get_verification_code(email="user@example.com", timeout=30)
+    assert code == "456789"
+
+
+def test_pop3_get_verification_code_falls_back_to_stale_message_when_no_new_message(monkeypatch):
+    service = Pop3EmailService(
+        {
+            "email": "user@example.com",
+            "host": "pop.example.com",
+            "port": 995,
+            "username": "user@example.com",
+            "password": "secret",
+            "use_ssl": True,
+            "poll_interval": 2,
+            "timeout": 30,
+            "otp_purpose": "login",
+            "clock_skew_tolerance": 120,
+        }
+    )
+
+    service.create_email()
+    now = time.time()
+
+    monkeypatch.setattr(
+        service,
+        "_fetch_latest_messages",
+        lambda: [
+            {
+                "subject": "OpenAI verification",
+                "from": "sender-a@openai-mail.example",
+                "to": "user@example.com",
+                "delivered_to": "user@example.com",
+                "x_original_to": "",
+                "envelope_to": "",
+                "cc": "",
+                "resent_to": "",
+                "resent_cc": "",
+                "body": "If you were not trying to log in to OpenAI. code is 987654",
+                "timestamp": now - 500,
+            }
+        ],
+    )
+
+    code = service.get_verification_code(email="user@example.com", timeout=30, otp_sent_at=now)
+    assert code == "987654"
